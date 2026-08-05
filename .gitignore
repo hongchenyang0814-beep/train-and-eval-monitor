@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.DS_Store
+
+# Local credentials and generated experiment repositories
+.env
+cookie
+project_id
+config/
+data/
+monitor_server.pid
+monitor_server.log
+streamlake_experiments/
+*.sqlite
+raw/
+exports/

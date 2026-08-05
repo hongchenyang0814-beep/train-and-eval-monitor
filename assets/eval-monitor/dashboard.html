@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StreamLake Evaluation Monitor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090d0f; --panel: #101619; --panel2: #151d20; --line: #293438;
+      --line2: #3b4a4f; --text: #e7eeec; --muted: #8c9a98; --cyan: #35d7c8;
+      --green: #99dd67; --amber: #efbd5b; --red: #ff7373; --blue: #79a9ff;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+    body { font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: 0; }
+    button, input, select, textarea { font: inherit; letter-spacing: 0; }
+    button, input, select, textarea { color: var(--text); background: var(--panel2); border: 1px solid var(--line2); border-radius: 4px; }
+    button { min-height: 36px; padding: 7px 12px; cursor: pointer; }
+    button:hover, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { border-color: var(--cyan); outline: none; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    input, select { min-height: 36px; padding: 7px 10px; }
+    input[type="search"] { width: 100%; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .muted { color: var(--muted); }
+    .hidden { display: none !important; }
+    .topbar { height: 64px; display: flex; align-items: center; gap: 16px; padding: 9px 18px; border-bottom: 1px solid var(--line2); background: #0b1012; position: sticky; top: 0; z-index: 20; }
+    .brand { min-width: 245px; }
+    .brand strong { display: block; color: #fff; font-size: 17px; }
+    .brand span { color: var(--muted); font-size: 11px; }
+    .connection { display: flex; align-items: center; gap: 8px; margin-right: auto; color: var(--muted); white-space: nowrap; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
+    .dot.online { background: var(--green); box-shadow: 0 0 9px rgba(153,221,103,.55); }
+    .dot.error { background: var(--red); }
+    .primary { background: var(--cyan); border-color: var(--cyan); color: #071110; font-weight: 700; }
+    .primary:hover { background: #5ce2d6; }
+    .icon-btn { width: 38px; padding: 0; font-size: 18px; }
+    .sync-icon { display: inline-block; margin-right: 7px; }
+    .spinning { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .summary-strip { min-height: 68px; display: grid; grid-template-columns: repeat(5, minmax(130px,1fr)); background: var(--panel); border-bottom: 1px solid var(--line); }
+    .summary-item { padding: 11px 18px; border-right: 1px solid var(--line); min-width: 0; }
+    .summary-item:last-child { border-right: 0; }
+    .eyebrow { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+    .summary-value { margin-top: 2px; color: #fff; font: 650 19px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .workspace { height: calc(100vh - 132px); display: grid; grid-template-columns: 310px minmax(0,1fr); min-height: 520px; }
+    .sidebar { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: #0d1214; }
+    .sidebar-head { padding: 14px; border-bottom: 1px solid var(--line); }
+    .section-title { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+    .section-title h2 { margin: 0; font-size: 12px; text-transform: uppercase; }
+    .section-title span { color: var(--muted); font-size: 11px; }
+    .eval-list { min-height: 0; overflow-y: auto; padding: 8px; }
+    .eval-item { width: 100%; padding: 11px; margin-bottom: 6px; text-align: left; background: transparent; border-color: transparent; }
+    .eval-item:hover { background: var(--panel2); }
+    .eval-item.selected { background: #142322; border-color: #347c74; }
+    .eval-title { display: grid; grid-template-columns: 8px minmax(0,1fr) auto; gap: 8px; align-items: start; }
+    .status-dot { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: var(--muted); }
+    .status-dot.success { background: var(--cyan); }
+    .status-dot.running { background: var(--amber); }
+    .status-dot.failed { background: var(--red); }
+    .eval-name { overflow-wrap: anywhere; color: var(--text); font-size: 12px; font-weight: 650; }
+    .eval-score { color: #fff; font: 700 13px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .eval-meta { display: flex; justify-content: space-between; gap: 8px; margin: 7px 0 0 15px; color: var(--muted); font-size: 10px; }
+    .log-badge { color: var(--green); }
+    .content { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+    .detail-head { min-height: 91px; padding: 14px 18px 11px; border-bottom: 1px solid var(--line); background: #0d1214; }
+    .detail-top { display: flex; justify-content: space-between; gap: 18px; align-items: start; }
+    .detail-top h1 { margin: 0; color: #fff; font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
+    .detail-sub { margin-top: 5px; color: var(--muted); font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+    .status-pill { padding: 4px 8px; border: 1px solid var(--line2); border-radius: 3px; color: var(--cyan); font-size: 10px; white-space: nowrap; }
+    .tabs { display: flex; overflow-x: auto; min-height: 43px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .tab { min-width: 88px; border: 0; border-right: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--muted); }
+    .tab.active { color: var(--cyan); box-shadow: inset 0 -2px var(--cyan); }
+    .tab-view { flex: 1; min-height: 0; overflow: auto; }
+    .tab-view.isolated-scroll { overflow: hidden; }
+    .empty { min-height: 260px; display: grid; place-items: center; padding: 30px; color: var(--muted); text-align: center; }
+    .score-grid { display: grid; grid-template-columns: repeat(5,minmax(100px,1fr)); border-bottom: 1px solid var(--line); }
+    .score-cell { padding: 16px 18px; border-right: 1px solid var(--line); }
+    .score-cell:last-child { border-right: 0; }
+    .score-cell strong { display: block; margin-top: 5px; color: #fff; font: 650 23px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .overview-grid { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(300px,.7fr); }
+    .band { padding: 18px; border-bottom: 1px solid var(--line); }
+    .overview-grid .band:nth-child(odd) { border-right: 1px solid var(--line); }
+    .band h3 { margin: 0 0 13px; font-size: 12px; text-transform: uppercase; }
+    .kv-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+    .kv { min-width: 0; padding: 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .kv span { display: block; color: var(--muted); font-size: 10px; }
+    .kv strong { display: block; margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }
+    .progress-row { display: grid; grid-template-columns: minmax(130px,1fr) 3fr auto; gap: 12px; align-items: center; margin: 10px 0; }
+    .progress-track { height: 6px; background: #253034; overflow: hidden; }
+    .progress-fill { display: block; height: 100%; background: var(--bar-color, var(--cyan)); transition: width .25s ease; }
+    .progress-value { color: var(--bar-color, var(--text)); }
+    .issue { padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--amber); }
+    .task-list { min-width: 800px; }
+    .task-head, .task-row { display: grid; grid-template-columns: minmax(230px,1.8fr) 110px 100px 120px minmax(180px,1fr); gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+    .task-head { position: sticky; top: 0; z-index: 2; background: #0d1214; color: var(--muted); font-size: 10px; text-transform: uppercase; }
+    .task-row:hover { background: var(--panel); }
+    .task-name strong, .task-name span { display: block; overflow-wrap: anywhere; }
+    .task-name span { color: var(--muted); font-size: 10px; }
+    .metric-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .metric-chip { padding: 3px 5px; border: 1px solid var(--line); color: #bfcac8; font-size: 10px; }
+    .sample-layout { display: grid; grid-template-columns: 300px minmax(0,1fr); height: 100%; min-height: 0; overflow: hidden; }
+    .sample-sidebar { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); overflow: hidden; }
+    .sample-controls, .log-controls, .compare-controls { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); }
+    .sample-controls { display: grid; }
+    .sample-list { flex: 1 1 auto; height: auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px; }
+    .sample-item { width: 100%; text-align: left; margin-bottom: 5px; padding: 9px; background: transparent; border-color: transparent; }
+    .sample-item.selected { background: #142322; border-color: #347c74; }
+    .sample-id { color: var(--cyan); font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+    .sample-preview { margin-top: 4px; color: var(--muted); font-size: 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .sample-detail { min-width: 0; min-height: 0; height: 100%; padding: 16px 32px 24px; overflow: auto; overscroll-behavior: contain; }
+    .sample-detail h3 { margin: 0 0 12px; font-size: 13px; }
+    .text-block { width: 100%; min-width: 0; margin-bottom: 14px; }
+    .text-block h4 { margin: 0; padding: 8px 10px; background: var(--panel2); border: 1px solid var(--line); color: var(--muted); font-size: 10px; text-transform: uppercase; }
+    .text-block pre { width: 100%; max-width: none; margin: 0; padding: 12px; border: 1px solid var(--line); border-top: 0; background: #0a0f11; color: #d6dfdd; font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 430px; overflow: auto; }
+    .text-block.input h4 { color: var(--blue); border-left: 3px solid var(--blue); background: #111b24; }
+    .text-block.input pre { border-color: #263b52; background: #0b1218; }
+    .text-block.output h4 { color: var(--green); border-left: 3px solid var(--green); background: #172018; }
+    .text-block.output pre { border-color: #354a2e; background: #0d130d; }
+    .variant-section { container-type: inline-size; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line2); }
+    .mode-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 10px; font-size: 12px; }
+    .mode-title strong { color: var(--cyan); }
+    .variant-section[data-variant="think"] .mode-title strong { color: var(--amber); }
+    .output-count { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
+    .output-switcher { margin: 0 0 10px; padding: 8px; border: 1px solid var(--line); background: #0d1214; }
+    .output-switcher-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 7px; }
+    .output-switcher-label, .output-position { color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .output-indexes { min-width: 0; display: grid; grid-template-columns: repeat(var(--output-columns, 16), minmax(28px,1fr)); gap: 5px; }
+    .output-index { width: 100%; min-width: 0; min-height: 30px; padding: 4px; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .output-index.active { color: #071110; background: var(--green); border-color: var(--green); font-weight: 700; }
+    @container (max-width: 680px) {
+      .output-indexes { grid-template-columns: repeat(var(--output-narrow-columns, 8), minmax(0,1fr)); }
+    }
+    .log-controls input { flex: 1; }
+    .log-meta { padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .log-view { margin: 0; padding: 14px 16px 30px; min-height: 400px; color: #cfd8d6; font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .compare-controls select { min-width: min(420px,60vw); }
+    .compare-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); border-bottom: 1px solid var(--line); }
+    .compare-side { padding: 18px; border-right: 1px solid var(--line); }
+    .compare-side:last-child { border-right: 0; }
+    .compare-side h3 { margin: 0 0 10px; overflow-wrap: anywhere; font-size: 13px; }
+    .delta.positive { color: var(--green); } .delta.negative { color: var(--red); }
+    .toast { position: fixed; right: 18px; bottom: 18px; z-index: 60; max-width: min(440px,calc(100vw - 36px)); padding: 11px 14px; background: #172024; border: 1px solid var(--line2); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+    .toast.error { border-color: var(--red); color: #ffd0d0; }
+    dialog { width: min(760px,calc(100vw - 28px)); max-height: calc(100vh - 32px); padding: 0; background: #101619; color: var(--text); border: 1px solid var(--line2); border-radius: 6px; }
+    dialog::backdrop { background: rgba(0,0,0,.7); }
+    .modal-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .modal-head h2 { margin: 0; font-size: 15px; }
+    .modal-body { padding: 16px; overflow: auto; }
+    .steps { margin: 0 0 14px; padding-left: 20px; color: #c5cecc; }
+    .steps li { margin: 7px 0; }
+    .config-state { margin-bottom: 14px; padding: 10px; border: 1px solid var(--line); background: #0c1113; }
+    #headersInput { width: 100%; min-height: 210px; padding: 10px; resize: vertical; font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    @media (max-width: 900px) {
+      .topbar { height: auto; min-height: 64px; flex-wrap: wrap; padding: 9px 12px; }
+      .brand { min-width: 0; flex: 1; }
+      .connection { order: 3; width: 100%; }
+      .summary-strip { grid-template-columns: repeat(3,1fr); }
+      .summary-item { padding: 9px 11px; }
+      .summary-item:nth-child(3) { border-right: 0; }
+      .workspace { height: auto; min-height: 0; grid-template-columns: 1fr; }
+      .sidebar { height: 310px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .content { min-height: 650px; }
+      .score-grid { grid-template-columns: repeat(3,1fr); }
+      .score-cell { padding: 12px; }
+      .score-cell:nth-child(3) { border-right: 0; }
+      .overview-grid { grid-template-columns: 1fr; }
+      .overview-grid .band:nth-child(odd) { border-right: 0; }
+      .sample-layout { grid-template-columns: 1fr; }
+      .tab-view.isolated-scroll { overflow: auto; }
+      .sample-layout { height: auto; overflow: visible; }
+      .sample-sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+      .sample-list { height: 260px; min-height: 0; }
+      .sample-detail { height: auto; padding: 16px; overflow: visible; }
+      .output-indexes { grid-template-columns: repeat(var(--output-narrow-columns, 8), minmax(0,1fr)); }
+    }
+    @media (max-width: 520px) {
+      .brand span { display: none; }
+      .connection { font-size: 11px; }
+      .summary-strip { grid-template-columns: repeat(2,1fr); }
+      .summary-item:nth-child(3) { border-right: 1px solid var(--line); }
+      .summary-item:nth-child(even) { border-right: 0; }
+      .summary-value { font-size: 16px; }
+      .detail-top { display: block; }
+      .status-pill { display: inline-block; margin-top: 8px; }
+      .score-grid { grid-template-columns: repeat(2,1fr); }
+      .score-cell:nth-child(3) { border-right: 1px solid var(--line); }
+      .score-cell:nth-child(even) { border-right: 0; }
+      .kv-grid { grid-template-columns: 1fr; }
+      .progress-row { grid-template-columns: 115px 1fr auto; font-size: 11px; }
+      .compare-grid { grid-template-columns: 1fr; }
+      .compare-side { border-right: 0; border-bottom: 1px solid var(--line); }
+      .compare-controls { display: grid; }
+      .compare-controls select { min-width: 0; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><strong>Evaluation Monitor</strong><span>STREAMLAKE / LOCAL LOG ANALYSIS</span></div>
+    <div class="connection"><span id="connectionDot" class="dot"></span><span id="connectionText">正在连接本地服务</span></div>
+    <button id="syncBtn" class="primary" disabled><span id="syncIcon" class="sync-icon">↻</span><span id="syncText">同步</span></button>
+    <button id="settingsBtn" class="icon-btn" title="平台连接配置" aria-label="平台连接配置">⚙</button>
+  </header>
+  <section class="summary-strip">
+    <div class="summary-item"><div class="eyebrow">评测记录</div><div id="totalCount" class="summary-value">--</div></div>
+    <div class="summary-item"><div class="eyebrow">本地日志</div><div id="logCount" class="summary-value">--</div></div>
+    <div class="summary-item"><div class="eyebrow">最高总分</div><div id="bestScore" class="summary-value">--</div></div>
+    <div class="summary-item"><div class="eyebrow">日志体积</div><div id="logSize" class="summary-value">--</div></div>
+    <div class="summary-item"><div class="eyebrow">最近同步</div><div id="lastSync" class="summary-value">--</div></div>
+  </section>
+  <main class="workspace">
+    <aside class="sidebar">
+      <div class="sidebar-head"><div class="section-title"><h2>评测日志</h2><span id="filteredCount">0 项</span></div><input id="evalSearch" type="search" placeholder="搜索名称、模型或 ID"></div>
+      <div id="evalList" class="eval-list"><div class="empty">正在加载评测列表</div></div>
+    </aside>
+    <section class="content">
+      <div id="detailHead" class="detail-head"><div class="empty" style="min-height:60px;padding:0">请选择一条评测记录</div></div>
+      <nav class="tabs" aria-label="评测视图">
+        <button class="tab active" data-tab="overview">概览</button><button class="tab" data-tab="tasks">子任务</button><button class="tab" data-tab="samples">样本</button><button class="tab" data-tab="log">日志</button><button class="tab" data-tab="compare">对比</button>
+      </nav>
+      <div id="tabView" class="tab-view"><div class="empty">从左侧选择要分析的评测日志</div></div>
+    </section>
+  </main>
+  <dialog id="configDialog">
+    <div class="modal-head"><h2>StreamLake 平台连接</h2><button id="closeConfig" class="icon-btn" title="关闭" aria-label="关闭">×</button></div>
+    <div class="modal-body">
+      <div id="configState" class="config-state">正在读取配置状态</div>
+      <ol class="steps">
+        <li>在浏览器打开 StreamLake 的评测任务列表页面。</li>
+        <li>按 <span class="mono">F12</span> 打开开发者工具，进入 <span class="mono">Network / 网络</span>，刷新页面。</li>
+        <li>找到名称含 <span class="mono">GetIamProjectList</span> 的请求，右键选择复制请求标头，或打开 Headers 后复制完整请求头。</li>
+        <li>将从 <span class="mono">GET ... HTTP/1.1</span> 开始、包含 <span class="mono">Cookie</span> 和 <span class="mono">Referer</span> 的整段内容粘贴到下方。服务会自动提取并保存 Cookie 与 project ID。</li>
+      </ol>
+      <textarea id="headersInput" autocomplete="off" spellcheck="false" placeholder="GET /api/console/open-api/proxy?... HTTP/1.1&#10;Cookie: ...&#10;Referer: https://console.streamlake.com/wanqing/proj-.../model-customization/model-competition-evaluating/list"></textarea>
+      <div class="modal-actions"><button id="cancelConfig">取消</button><button id="saveConfig" class="primary">保存配置</button></div>
+    </div>
+  </dialog>
+  <div id="toast" class="toast hidden"></div>
+  <script>
+    const TASK_LABELS = {
+      challenge_itemic_pattern_caption_video:'视频物料理解', challenge_itemic_pattern_caption_product:'商品物料理解',
+      challenge_itemic_pattern_caption_ad:'广告物料理解', challenge_itemic_pattern_caption_live:'直播物料理解',
+      challenge_evolution_action_select:'用户行为选择', challenge_evolution_topic_gen:'用户主题生成',
+      challenge_recommendation_video:'视频推荐', challenge_recommendation_product:'商品推荐',
+      challenge_recommendation_ad:'广告推荐', challenge_recommendation_live:'直播推荐', challenge_common_sense:'通用常识'
+    };
+    const state = { snapshot:null, selectedId:localStorage.getItem('eval-monitor-selected')||'', detail:null, tab:'overview', token:'', samples:[], sample:null, compare:null, poll:null };
+    const $ = id => document.getElementById(id);
+    const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    const num = (value, digits=4) => value === null || value === undefined || value === '' ? '--' : Number(value).toFixed(digits).replace(/0+$/,'').replace(/\.$/,'');
+    const bytes = value => { if (!value) return '0 B'; const u=['B','KiB','MiB','GiB']; const i=Math.min(Math.floor(Math.log(value)/Math.log(1024)),3); return `${(value/1024**i).toFixed(i?1:0)} ${u[i]}`; };
+    const duration = value => { if (value===null || value===undefined) return '--'; const s=Math.round(Number(value)); const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h ? `${h}h ${m}m` : `${m}m ${s%60}s`; };
+    const date = value => { if (!value) return '--'; const d=new Date(value); return Number.isNaN(d.getTime()) ? value : d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); };
+    const statusClass = s => /succeed|complete/i.test(s)?'success':/running|pending/i.test(s)?'running':/fail|error/i.test(s)?'failed':'';
+    function toast(message, error=false) { const el=$('toast'); el.textContent=message; el.className=`toast${error?' error':''}`; clearTimeout(toast.timer); toast.timer=setTimeout(()=>el.classList.add('hidden'),5000); }
+    async function api(path, options={}) { const res=await fetch(path,options); let data={}; try { data=await res.json(); } catch {} if(!res.ok) throw new Error(data.error||`请求失败 (${res.status})`); return data; }
+    async function loadSnapshot(quiet=false) {
+      try {
+        const previousRunning=state.snapshot?.sync?.running;
+        state.snapshot=await api('/api/snapshot'); state.token=state.snapshot.token;
+        const connectionText=state.snapshot.config.configured?'本地服务在线 · 平台已配置':'本地服务在线 · 等待平台配置';
+        $('connectionDot').className='dot online'; $('connectionText').textContent=connectionText;
+        renderSummary(); renderEvalList(); updateSyncButton(); renderConfigState();
+        const ids=state.snapshot.evaluations.map(x=>x.id);
+        if (!ids.includes(state.selectedId)) state.selectedId=ids[0]||'';
+        if (state.selectedId && (!state.detail || state.detail.evaluation.id!==state.selectedId || (previousRunning && !state.snapshot.sync.running))) await selectEvaluation(state.selectedId, true);
+        if (state.snapshot.sync.running) schedulePoll(1800); else schedulePoll(15000);
+        if (previousRunning && !state.snapshot.sync.running) toast(state.snapshot.sync.status==='success'?'同步完成，列表与日志已更新':`同步失败：${state.snapshot.sync.message}`,state.snapshot.sync.status!=='success');
+      } catch(error) {
+        $('connectionDot').className='dot error'; $('connectionText').textContent='本地服务连接失败'; if(!quiet) toast(error.message,true); schedulePoll(5000);
+      }
+    }
+    function schedulePoll(ms) { clearTimeout(state.poll); state.poll=setTimeout(()=>loadSnapshot(true),ms); }
+    function renderSummary() {
+      const items=state.snapshot.evaluations, logs=items.filter(x=>x.log.available), best=Math.max(...items.map(x=>Number(x.score)).filter(Number.isFinite));
+      $('totalCount').textContent=items.length; $('logCount').textContent=`${logs.length} / ${items.length}`; $('bestScore').textContent=Number.isFinite(best)?num(best,6):'--';
+      $('logSize').textContent=bytes(logs.reduce((n,x)=>n+x.log.size_bytes,0));
+      const finished=state.snapshot.sync.finished_at || state.snapshot.sync_state?.finished_at; $('lastSync').textContent=finished?date(finished):'--';
+    }
+    function renderEvalList() {
+      const q=$('evalSearch').value.trim().toLowerCase(); const items=state.snapshot.evaluations.filter(x=>`${x.name} ${x.model_name} ${x.id}`.toLowerCase().includes(q)); $('filteredCount').textContent=`${items.length} 项`;
+      $('evalList').innerHTML=items.length?items.map(x=>`<button class="eval-item ${x.id===state.selectedId?'selected':''}" data-id="${esc(x.id)}"><div class="eval-title"><span class="status-dot ${statusClass(x.status)}"></span><span class="eval-name">${esc(x.name)}</span><span class="eval-score">${num(x.score)}</span></div><div class="eval-meta"><span>${esc(x.model_name||x.status)}</span><span class="${x.log.available?'log-badge':''}">${x.log.available?bytes(x.log.size_bytes):'无日志'}</span></div><div class="eval-meta"><span>${date(x.created_at)}</span><span>${duration(x.duration)}</span></div></button>`).join(''):'<div class="empty">没有匹配的评测记录</div>';
+      $('evalList').querySelectorAll('[data-id]').forEach(el=>el.addEventListener('click',()=>selectEvaluation(el.dataset.id)));
+    }
+    async function selectEvaluation(id, quiet=false) {
+      state.selectedId=id; localStorage.setItem('eval-monitor-selected',id); state.sample=null; state.samples=[]; state.compare=null; renderEvalList();
+      $('tabView').innerHTML='<div class="empty">正在解析评测与本地日志</div>';
+      try { state.detail=await api(`/api/evaluations/${encodeURIComponent(id)}`); renderHeader(); renderTab(); }
+      catch(error) { $('tabView').innerHTML=`<div class="empty">${esc(error.message)}</div>`; if(!quiet) toast(error.message,true); }
+    }
+    function renderHeader() {
+      const e=state.detail.evaluation; $('detailHead').innerHTML=`<div class="detail-top"><div><h1>${esc(e.name)}</h1><div class="detail-sub">${esc(e.model_name)} · ${esc(e.id)} · ${date(e.start_time)} → ${date(e.end_time)}</div></div><span class="status-pill">${esc(e.status)}</span></div>`;
+    }
+    function renderTab() {
+      document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===state.tab));
+      $('tabView').classList.toggle('isolated-scroll',state.tab==='samples');
+      if(!state.detail) return; ({overview:renderOverview,tasks:renderTasks,samples:renderSamples,log:renderLog,compare:renderCompare}[state.tab]||renderOverview)();
+    }
+    function scoreCells(e) { return [['总分',e.score],['R0 懂物料',e.groups.r0],['R1 懂用户',e.groups.r1],['R2 懂推荐',e.groups.r2],['R3 常识',e.groups.r3]].map(([k,v])=>`<div class="score-cell"><span class="eyebrow">${k}</span><strong>${num(v,6)}</strong></div>`).join(''); }
+    function renderOverview() {
+      const {evaluation:e,analysis:a}=state.detail; if(!a){$('tabView').innerHTML=`<div class="score-grid">${scoreCells(e)}</div><div class="empty">该评测尚未产生可分析的本地日志；同步会在平台输出可用后自动下载。</div>`;return;}
+      const s=a.summary||{}, source=a.source||{}, metadata=a.metadata||{};
+      const groups=[['r0','懂物料'],['r1','懂用户'],['r2','懂推荐'],['r3','常识']];
+      const colors={r0:'var(--cyan)',r1:'var(--blue)',r2:'var(--green)',r3:'var(--amber)'};
+      $('tabView').innerHTML=`<div class="score-grid">${scoreCells(e)}</div><div class="overview-grid"><section class="band"><h3>平台评分构成</h3>${groups.map(([g,label])=>`<div class="progress-row" style="--bar-color:${colors[g]}"><span>${label}</span><span class="progress-track"><span class="progress-fill" style="width:${Math.min(100,Math.max(0,Number(e.groups[g])||0)/0.8*100)}%"></span></span><strong class="mono progress-value">${num(e.groups[g],6)}</strong></div>`).join('')}</section><section class="band"><h3>日志解析</h3><div class="kv-grid"><div class="kv"><span>完成任务</span><strong>${s.completed_count??0} / ${s.task_count??0}</strong></div><div class="kv"><span>样本详情</span><strong>${s.sample_detail_count??0}</strong></div><div class="kv"><span>保留日志行</span><strong>${s.retained_line_count??0} / ${s.raw_line_count??0}</strong></div><div class="kv"><span>解析异常</span><strong>${s.issue_count??0}</strong></div></div></section><section class="band"><h3>运行信息</h3><div class="kv-grid"><div class="kv"><span>基础模型</span><strong>${esc(e.base_model||'--')}</strong></div><div class="kv"><span>平台耗时</span><strong>${duration(e.duration)}</strong></div><div class="kv"><span>日志运行时间</span><strong>${duration(source.duration_seconds)}</strong></div><div class="kv"><span>日志大小</span><strong>${bytes(source.file_size)}</strong></div><div class="kv"><span>评测版本</span><strong>${esc(metadata.version||'--')}</strong></div><div class="kv"><span>Seed</span><strong>${esc(metadata.seed||'--')}</strong></div></div></section><section class="band"><h3>解析诊断</h3>${a.issues?.length?a.issues.map(x=>`<div class="issue">${esc(typeof x==='string'?x:JSON.stringify(x))}</div>`):'<div class="muted">未发现结构化日志异常</div>'}</section></div>`;
+    }
+    function contributionMap() { const map={}; const c=state.detail.evaluation.contributions||{}; Object.entries(c).forEach(([group,rows])=>(rows||[]).forEach(x=>map[x.task]={...x,group})); return map; }
+    function renderTasks() {
+      const a=state.detail.analysis; if(!a){$('tabView').innerHTML='<div class="empty">本地日志尚不可用</div>';return;} const c=contributionMap();
+      $('tabView').innerHTML=`<div class="task-list"><div class="task-head"><span>任务</span><span>状态</span><span>样本</span><span>平台贡献</span><span>日志指标</span></div>${a.tasks.map(t=>{const p=c[t.key]||{};const chips=Object.entries(t.metrics||{}).slice(0,3).map(([k,v])=>`<span class="metric-chip" title="${esc(k)}">${esc(k.replace(/Macro | Core/g,'').slice(0,16))}: ${num(v)}</span>`).join('');return `<div class="task-row"><div class="task-name"><strong>${esc(t.label||TASK_LABELS[t.key]||t.key)}</strong><span>${esc(t.key)}</span></div><span>${esc(t.status)}</span><span class="mono">${t.sample_count??'--'}</span><span class="mono">${p.value===undefined?'--':num(p.value,6)}</span><div class="metric-chips">${chips||'<span class="muted">无结构化指标</span>'}</div></div>`}).join('')}</div>`;
+    }
+    async function loadSamples(task='',query='') { try { const data=await api(`/api/evaluations/${encodeURIComponent(state.selectedId)}/samples?task=${encodeURIComponent(task)}&q=${encodeURIComponent(query)}`); state.samples=data.samples; renderSampleList(); if(data.samples.length && !state.sample) loadSample(data.samples[0].index); } catch(e){toast(e.message,true);} }
+    function renderSamples() {
+      const a=state.detail.analysis; if(!a){$('tabView').innerHTML='<div class="empty">本地日志尚不可用</div>';return;} const tasks=(a.tasks||[]).filter(x=>x.example_count).map(x=>`<option value="${esc(x.key)}">${esc(x.label)} (${x.example_count})</option>`).join('');
+      $('tabView').innerHTML=`<div class="sample-layout"><aside class="sample-sidebar"><div class="sample-controls"><select id="sampleTask"><option value="">全部任务</option>${tasks}</select><input id="sampleSearch" type="search" placeholder="搜索样本 ID 或输入"></div><div id="sampleList" class="sample-list"><div class="empty">正在读取样本</div></div></aside><article id="sampleDetail" class="sample-detail"><div class="empty">选择一个样本查看完整输入输出</div></article></div>`;
+      let timer; const refresh=()=>{clearTimeout(timer);timer=setTimeout(()=>{state.sample=null;loadSamples($('sampleTask').value,$('sampleSearch').value)},250)}; $('sampleTask').addEventListener('change',refresh);$('sampleSearch').addEventListener('input',refresh); loadSamples();
+    }
+    function renderSampleList() { const el=$('sampleList'); if(!el)return; el.innerHTML=state.samples.length?state.samples.map(x=>`<button class="sample-item ${state.sample?.index===x.index?'selected':''}" data-index="${x.index}"><div class="sample-id">${esc(x.id)} · ${esc(TASK_LABELS[x.task]||x.task)}</div><div class="sample-preview">${esc(x.preview||'无输入预览')}</div></button>`).join(''):'<div class="empty">没有匹配的样本</div>'; el.querySelectorAll('[data-index]').forEach(b=>b.addEventListener('click',()=>loadSample(Number(b.dataset.index)))); }
+    async function loadSample(index) { try { const data=await api(`/api/evaluations/${encodeURIComponent(state.selectedId)}/samples/${index}`); state.sample={...data.sample,index};renderSampleList();renderSampleDetail(); } catch(e){toast(e.message,true);} }
+    function block(title,text,type=''){return `<section class="text-block ${type}"><h4>${esc(title)}</h4><pre>${esc(text||'--')}</pre></section>`;}
+    function renderSampleDetail(){
+      const el=$('sampleDetail'),s=state.sample;if(!el||!s)return;const variants=s.variants||{};
+      const sections=Object.entries(variants).map(([mode,v])=>{const outputs=v.outputs||[],first=outputs[0],multiple=outputs.length>1;return `<section class="variant-section" data-variant="${esc(mode)}"><div class="mode-title"><strong>${mode==='no_think'?'No-think':'Think'} 模式</strong>${multiple?`<span class="output-count">${outputs.length} 个输出</span>`:''}</div>${block('Input',v.input,'input')}${multiple?`<div class="output-switcher"><div class="output-switcher-head"><span class="output-switcher-label">选择输出 · ${outputs.length} 个</span><span class="output-position">第 1 / ${outputs.length} 个</span></div><div class="output-indexes" style="--output-columns:${Math.min(outputs.length,16)};--output-narrow-columns:${Math.min(outputs.length,8)}" role="tablist" aria-label="${mode==='no_think'?'No-think':'Think'} 输出选择">${outputs.map((o,pos)=>`<button class="output-index ${pos===0?'active':''}" data-output-pos="${pos}" role="tab" aria-selected="${pos===0}">${esc(o.index)}</button>`).join('')}</div></div>${block(`Output ${first.index}`,first.text,'output')}`:outputs.length?block('Output',first.text,'output'):block('Output','--','output')}</section>`}).join('');
+      el.innerHTML=`<h3>样本 ${esc(s.id)} · ${esc(TASK_LABELS[s.task]||s.task)}</h3>${s.prompt?block('Prompt',s.prompt):''}${sections}${!Object.keys(variants).length?block('Response',s.response,'output'):''}`;
+      el.querySelectorAll('.output-index').forEach(button=>button.addEventListener('click',()=>{const section=button.closest('.variant-section'),mode=section.dataset.variant,outputs=variants[mode]?.outputs||[],position=Number(button.dataset.outputPos),output=outputs[position];if(!output)return;section.querySelectorAll('.output-index').forEach(item=>{const active=item===button;item.classList.toggle('active',active);item.setAttribute('aria-selected',String(active))});section.querySelector('.output-position').textContent=`第 ${position+1} / ${outputs.length} 个`;section.querySelector('.text-block.output h4').textContent=`Output ${output.index}`;section.querySelector('.text-block.output pre').textContent=output.text||'--';}));
+    }
+    async function loadLog(offset=0){const q=$('logQuery')?.value||'';try{const data=await api(`/api/evaluations/${encodeURIComponent(state.selectedId)}/log?offset=${offset}&limit=500&q=${encodeURIComponent(q)}`);$('logMeta').textContent=`显示 ${data.offset+1}-${Math.min(data.offset+data.lines.length,data.total)} / ${data.total} 行`;$('logView').textContent=data.lines.join('\n');$('prevLog').disabled=data.offset===0;$('nextLog').disabled=data.offset+data.lines.length>=data.total;$('prevLog').dataset.offset=Math.max(0,data.offset-500);$('nextLog').dataset.offset=data.offset+500;}catch(e){toast(e.message,true);}}
+    function renderLog(){if(!state.detail.analysis){$('tabView').innerHTML='<div class="empty">本地日志尚不可用</div>';return;}$('tabView').innerHTML='<div class="log-controls"><input id="logQuery" type="search" placeholder="过滤当前日志正文"><button id="searchLog">搜索</button><button id="prevLog">上一页</button><button id="nextLog">下一页</button></div><div id="logMeta" class="log-meta">正在读取</div><pre id="logView" class="log-view"></pre>';$('searchLog').onclick=()=>loadLog(0);$('logQuery').onkeydown=e=>{if(e.key==='Enter')loadLog(0)};$('prevLog').onclick=e=>loadLog(Number(e.currentTarget.dataset.offset));$('nextLog').onclick=e=>loadLog(Number(e.currentTarget.dataset.offset));loadLog();}
+    async function renderCompare(){const choices=state.snapshot.evaluations.filter(x=>x.id!==state.selectedId&&x.score!==null);$('tabView').innerHTML=`<div class="compare-controls"><select id="compareSelect"><option value="">选择另一条评测</option>${choices.map(x=>`<option value="${esc(x.id)}">${esc(x.name)} · ${num(x.score)}</option>`).join('')}</select></div><div id="compareBody" class="empty">选择评测后查看平台分数差异</div>`;$('compareSelect').onchange=async e=>{if(!e.target.value)return;try{state.compare=await api(`/api/evaluations/${encodeURIComponent(e.target.value)}`);renderComparison();}catch(err){toast(err.message,true)}};}
+    function renderComparison(){const a=state.detail.evaluation,b=state.compare.evaluation,groups=[['score','总分'],['r0','R0 懂物料'],['r1','R1 懂用户'],['r2','R2 懂推荐'],['r3','R3 常识']];const val=(e,k)=>k==='score'?e.score:e.groups[k];$('compareBody').className='';$('compareBody').innerHTML=`<div class="compare-grid"><section class="compare-side"><h3>${esc(a.name)}</h3><strong class="mono">${num(a.score,6)}</strong></section><section class="compare-side"><h3>${esc(b.name)}</h3><strong class="mono">${num(b.score,6)}</strong></section></div><section class="band"><h3>当前评测相对对比项</h3>${groups.map(([k,label])=>{const av=Number(val(a,k)),bv=Number(val(b,k)),d=av-bv;return `<div class="progress-row"><span>${label}</span><span class="mono">${num(av,6)} vs ${num(bv,6)}</span><strong class="delta ${d>=0?'positive':'negative'}">${d>=0?'+':''}${num(d,6)}</strong></div>`}).join('')}</section>`;}
+    function updateSyncButton(){const running=state.snapshot.sync.running,configured=state.snapshot.config.configured;$('syncBtn').disabled=running||!configured;$('syncText').textContent=running?'同步中':'同步';$('syncIcon').className=`sync-icon${running?' spinning':''}`;}
+    function renderConfigState(){if(!state.snapshot)return;const c=state.snapshot.config;$('configState').innerHTML=c.configured?`<strong style="color:var(--green)">已配置</strong><br><span class="muted">Project ID: <span class="mono">${esc(c.project_id)}</span> · Cookie 已安全保存，更新于 ${date(c.cookie_updated_at)}</span>`:'<strong style="color:var(--amber)">尚未配置</strong><br><span class="muted">首次同步前请粘贴平台请求头。</span>';}
+    $('evalSearch').addEventListener('input',()=>state.snapshot&&renderEvalList());
+    document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;renderTab()}));
+    $('settingsBtn').onclick=()=>{$('headersInput').value='';renderConfigState();$('configDialog').showModal()};$('closeConfig').onclick=$('cancelConfig').onclick=()=>$('configDialog').close();
+    $('saveConfig').onclick=async()=>{const headers=$('headersInput').value;if(!headers.trim()){toast('请先粘贴完整请求头',true);return;}$('saveConfig').disabled=true;try{await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Eval-Monitor-Token':state.token},body:JSON.stringify({headers})});$('headersInput').value='';$('configDialog').close();toast('配置已保存，可以开始同步');await loadSnapshot(true);}catch(e){toast(e.message,true)}finally{$('saveConfig').disabled=false}};
+    $('syncBtn').onclick=async()=>{try{await api('/api/sync',{method:'POST',headers:{'X-Eval-Monitor-Token':state.token}});toast('同步已启动，将更新评测列表和完整日志');await loadSnapshot(true);}catch(e){toast(e.message,true)}};
+    loadSnapshot();
+  </script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "StreamLake Experiment Analyst"
+  short_description: "Sync, analyze, and monitor StreamLake experiments"
+  default_prompt: "Use $streamlake-experiment-analyst to deploy the evaluation Monitor, sync my StreamLake experiments and logs, and analyze metric differences."

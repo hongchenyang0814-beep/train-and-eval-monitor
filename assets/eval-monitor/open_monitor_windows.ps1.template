@@ -1,0 +1,36 @@
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$SshTarget,
+    [Nullable[int]]$SshPort = $null,
+    [int]$LocalPort = __REMOTE_PORT__
+)
+
+$ErrorActionPreference = "Stop"
+
+if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
+    throw "Windows OpenSSH client is not installed or ssh.exe is not in PATH."
+}
+
+$forward = "${LocalPort}:127.0.0.1:__REMOTE_PORT__"
+$arguments = @("-N", "-L", $forward, "-o", "ExitOnForwardFailure=yes")
+if ($null -ne $SshPort) {
+    $arguments += @("-p", $SshPort)
+}
+$arguments += $SshTarget
+
+Write-Host "Opening SSH tunnel to $SshTarget ..."
+$sshProcess = Start-Process -FilePath "ssh" -ArgumentList $arguments -PassThru -NoNewWindow
+Start-Sleep -Seconds 2
+if ($sshProcess.HasExited) {
+    throw "SSH tunnel exited before it became ready. Check the SSH target and authentication."
+}
+
+$url = "http://127.0.0.1:${LocalPort}"
+Start-Process $url
+Write-Host "Evaluation monitor opened at $url"
+Write-Host "Keep this PowerShell window open. Press Ctrl+C to close the tunnel."
+
+try { Wait-Process -Id $sshProcess.Id }
+finally {
+    if (-not $sshProcess.HasExited) { Stop-Process -Id $sshProcess.Id }
+}
