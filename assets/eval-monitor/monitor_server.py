@@ -162,6 +162,14 @@ class EvaluationRepository:
     def _log_path(self, evaluation_id: str) -> Path:
         return self.logs_dir / evaluation_id / "evaluation.log"
 
+    def download_log_path(self, evaluation_id: str) -> Path:
+        if EVALUATION_ID_RE.fullmatch(evaluation_id) is None:
+            raise ValueError("评测 ID 无效")
+        path = self._log_path(evaluation_id)
+        if not path.is_file():
+            raise FileNotFoundError("该评测尚无可下载的本地日志")
+        return path
+
     def _cache_paths(self, evaluation_id: str) -> tuple[Path, Path]:
         return (
             self.analysis_cache_dir / f"{evaluation_id}.json.gz",
@@ -427,6 +435,16 @@ class AnalysisManager:
             for evaluation_id, signature in inventory
             if not self.repository._persistent_cache_valid(evaluation_id, signature)
         ]
+        pending_ids = {evaluation_id for evaluation_id, _ in pending}
+        with self.repository.lock:
+            work = [
+                (evaluation_id, signature)
+                for evaluation_id, signature in inventory
+                if not (
+                    (cached := self.repository.cache.get(evaluation_id))
+                    and cached.get("signature") == signature
+                )
+            ]
         cached_count = len(inventory) - len(pending)
         fingerprint = tuple(
             (evaluation_id, signature["mtime_ns"], signature["size"], signature["parser_version"])
@@ -437,30 +455,41 @@ class AnalysisManager:
                 return False
             self.fingerprint = fingerprint
             self.state = {
-                "running": bool(pending),
-                "status": "running" if pending else "ready",
+                "running": bool(work),
+                "status": "running" if work else "ready",
                 "total": len(inventory),
-                "completed": cached_count,
+                "completed": len(inventory) - len(work),
                 "cached": cached_count,
                 "parsed": 0,
+                "loaded": 0,
                 "current_id": "",
                 "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-                "finished_at": "" if pending else datetime.now().astimezone().isoformat(timespec="seconds"),
+                "finished_at": "" if work else datetime.now().astimezone().isoformat(timespec="seconds"),
                 "errors": [],
             }
-        if not pending:
+        if not work:
             return False
-        threading.Thread(target=self._worker, args=(pending,), name="evaluation-analysis-cache", daemon=True).start()
+        threading.Thread(
+            target=self._worker,
+            args=(work, pending_ids),
+            name="evaluation-analysis-cache",
+            daemon=True,
+        ).start()
         return True
 
-    def _worker(self, inventory: list[tuple[str, dict[str, int]]]) -> None:
+    def _worker(
+        self,
+        inventory: list[tuple[str, dict[str, int]]],
+        pending_ids: set[str],
+    ) -> None:
         for evaluation_id, signature in inventory:
             with self.lock:
                 self.state["current_id"] = evaluation_id
             try:
                 self.repository._analysis(evaluation_id)
                 with self.lock:
-                    self.state["parsed"] += 1
+                    field = "parsed" if evaluation_id in pending_ids else "loaded"
+                    self.state[field] += 1
             except Exception as error:
                 with self.lock:
                     self.state["errors"].append({"id": evaluation_id, "error": str(error)[:1000]})
@@ -556,6 +585,7 @@ class EvalMonitorServer(ThreadingHTTPServer):
         self.repository = EvaluationRepository(Path(config["output_dir"]), parser)
         self.analysis_manager = AnalysisManager(self.repository)
         self.sync_manager = SyncManager(config, self.analysis_manager.ensure_started)
+        self.analysis_manager.ensure_started()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -582,6 +612,21 @@ class Handler(BaseHTTPRequestHandler):
         raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self._headers("application/json; charset=utf-8", len(raw), status)
         self.wfile.write(raw)
+
+    def _attachment(self, path: Path, filename: str) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        try:
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _error(self, status: int, message: str) -> None:
         self._json({"error": message}, status)
@@ -657,6 +702,12 @@ class Handler(BaseHTTPRequestHandler):
             match = re.fullmatch(r"/api/evaluations/([^/]+)/samples/(\d+)", path)
             if match:
                 self._json({"sample": self.app.repository.sample(unquote(match.group(1)), int(match.group(2)))})
+                return
+            match = re.fullmatch(r"/api/evaluations/([^/]+)/download-log", path)
+            if match:
+                evaluation_id = unquote(match.group(1))
+                log_path = self.app.repository.download_log_path(evaluation_id)
+                self._attachment(log_path, f"{evaluation_id}.log")
                 return
             match = re.fullmatch(r"/api/evaluations/([^/]+)/log", path)
             if match:

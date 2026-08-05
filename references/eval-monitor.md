@@ -96,7 +96,8 @@ Pass `-SshPort PORT` only when the SSH port is not already defined in `~/.ssh/co
 ## Behavior
 
 - The left list and sample detail panes scroll independently.
-- Completed evaluations expose platform scores, 11 tasks, parsed samples, Think/No-think outputs, filtered logs, and comparisons.
+- Completed evaluations expose platform scores, 11 tasks, parsed samples, Think/No-think outputs, filtered logs, and comparisons. Task rows show displayed samples, generation requests, and generation time; the sample browser groups its 11 tasks under 懂物料, 懂用户, 懂推荐, and 懂世界.
+- The Log tab downloads the selected evaluation's complete original log to the browser device. The server streams the file without a size limit, and browser settings determine its final local path.
 - Multi-output samples show one output body per mode. Selectors use 16 columns in a wide pane and 8 columns below the container threshold.
 - Running evaluations remain visible without requesting output until `hasOutput=true`.
 - The Sync button invokes the bundled `streamlake_experiments.py sync`, including the 2026-08-01 cutoff and complete-log download rules.

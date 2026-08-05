@@ -18,6 +18,11 @@ MONITOR_SPEC = importlib.util.spec_from_file_location("bundled_eval_monitor_test
 monitor = importlib.util.module_from_spec(MONITOR_SPEC)
 sys.modules[MONITOR_SPEC.name] = monitor
 MONITOR_SPEC.loader.exec_module(monitor)
+PARSER_MODULE_PATH = ROOT / "assets" / "eval-monitor" / "eval_log_parser.py"
+PARSER_SPEC = importlib.util.spec_from_file_location("bundled_eval_log_parser_tests", PARSER_MODULE_PATH)
+parser_module = importlib.util.module_from_spec(PARSER_SPEC)
+sys.modules[PARSER_SPEC.name] = parser_module
+PARSER_SPEC.loader.exec_module(parser_module)
 
 
 class FakeParser:
@@ -100,6 +105,30 @@ class EvalMonitorDeploymentTests(unittest.TestCase):
         self.assertIn(str(self.port), (self.target / "open_monitor_windows.ps1").read_text(encoding="utf-8"))
         self.assertFalse((self.home / ".config" / "streamlake" / "cookie").exists())
 
+    def test_monitor_streams_complete_log_as_browser_attachment(self):
+        result = self.run_tool(
+            "deploy",
+            "--target-dir", str(self.target),
+            "--output-dir", str(self.output),
+            "--port", str(self.port),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        evaluation_id = "eval-task-download-1"
+        payload = b"complete evaluation log\n" * 1024
+        log_path = self.output / "logs" / evaluation_id / "evaluation.log"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_bytes(payload)
+
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{self.port}/api/evaluations/{evaluation_id}/download-log"
+        ) as response:
+            self.assertEqual(response.read(), payload)
+            self.assertEqual(response.headers["Content-Type"], "application/octet-stream")
+            self.assertEqual(
+                response.headers["Content-Disposition"],
+                f'attachment; filename="{evaluation_id}.log"',
+            )
+
     def test_default_deploy_keeps_runtime_under_target(self):
         result = self.run_tool(
             "deploy",
@@ -130,12 +159,67 @@ class EvalMonitorAnalysisCacheTests(unittest.TestCase):
 
             restarted = monitor.EvaluationRepository(root, parser)
             manager = monitor.AnalysisManager(restarted)
-            self.assertFalse(manager.ensure_started())
+            self.assertTrue(manager.ensure_started())
+            for _ in range(100):
+                if not manager.snapshot()["running"]:
+                    break
+                time.sleep(0.01)
             state = manager.snapshot()
             self.assertEqual(state["status"], "ready")
             self.assertEqual(state["cached"], 1)
             self.assertEqual(state["parsed"], 0)
+            self.assertEqual(state["loaded"], 1)
             self.assertEqual(parser.calls, 1)
+            self.assertIn(evaluation_id, restarted.cache)
+
+
+class EvalLogParserTests(unittest.TestCase):
+    def test_loaded_sample_count_is_used_when_progress_bar_is_absent(self):
+        text = """
+[2026-08-05 00:00:00,000] [INFO] tasks      : ['challenge_evolution_action_select']
+Task [1/1]: challenge_evolution_action_select | Split: test | Sample Size: N/A
+[green]Loaded 574 samples for challenge_evolution_action_select[/green]
+Using EvolutionSelectEvaluator for challenge_evolution_action_select
+Updated sample metrics to:
+/output/merged/challenge_evolution_action_select/test_generated.json
+"""
+
+        parsed = parser_module.parse_log(text, "evaluation.log", len(text.encode("utf-8")))
+        task = next(item for item in parsed["tasks"] if item["key"] == "challenge_evolution_action_select")
+
+        self.assertEqual(task["sample_count"], 574)
+        self.assertEqual(task["status"], "已完成")
+        self.assertEqual(task["metrics"], {})
+
+    def test_dashboard_explains_missing_task_summary_metrics(self):
+        dashboard = (ROOT / "assets" / "eval-monitor" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn("未提供任务级指标", dashboard)
+
+    def test_dashboard_renders_recommendation_automatic_metrics(self):
+        dashboard = (ROOT / "assets" / "eval-monitor" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn("Think 抄答", dashboard)
+        self.assertIn("No-think 抄答", dashboard)
+        self.assertIn("两路 SID 重复", dashboard)
+        self.assertIn("hallucination.hallucination_rate", dashboard)
+        self.assertIn("repeat.repeated_sid_count", dashboard)
+        self.assertIn("challenge_evolution_topic_gen'&&auto.sid_candidate_count", dashboard)
+        self.assertIn("metric-chip platform", dashboard)
+        self.assertIn("平台正式指标 · 权重", dashboard)
+        self.assertIn("下载完整日志", dashboard)
+        self.assertIn("/download-log", dashboard)
+        self.assertIn("state.tab!=='log'", dashboard)
+        self.assertIn("正在加载评测数据", dashboard)
+
+    def test_dashboard_groups_samples_and_shows_task_workload(self):
+        dashboard = (ROOT / "assets" / "eval-monitor" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn("样本/耗时", dashboard)
+        self.assertIn("展示样本", dashboard)
+        self.assertIn("生成请求", dashboard)
+        self.assertIn("generation_seconds", dashboard)
+        self.assertIn("sample-group-title", dashboard)
+        self.assertIn("sample-task-title", dashboard)
+        for group in ("懂物料", "懂用户", "懂推荐", "懂世界"):
+            self.assertIn(group, dashboard)
 
 
 if __name__ == "__main__":

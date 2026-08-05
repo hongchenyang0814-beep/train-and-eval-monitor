@@ -24,7 +24,7 @@ TASK_CATALOG = [
 ]
 
 TASK_INFO = {key: {"group": group, "label": label} for key, group, label in TASK_CATALOG}
-PARSER_VERSION = 3
+PARSER_VERSION = 4
 
 ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 RICH_TAG_RE = re.compile(
@@ -603,6 +603,17 @@ def parse_log(text: str, filename: str, file_size: int | None = None) -> dict[st
             task["status"] = "评测中"
             generation_phase[current_task] = False
             keep(f"Using {evaluator.group(1)} for {current_task}")
+            continue
+
+        loaded_samples = re.search(
+            r"Loaded\s+(\d+)\s+samples\s+for\s+(challenge_[\w.-]+)", line, re.I
+        )
+        if loaded_samples:
+            count = int(loaded_samples.group(1))
+            loaded_task = ensure_task(loaded_samples.group(2))
+            previous = loaded_task.get("sample_count")
+            loaded_task["sample_count"] = max(count, previous or 0)
+            keep(f"Loaded {count} samples for {loaded_samples.group(2)}")
             continue
 
         progress_count = re.search(r"Processed prompts:\s*(\d+)%.*?\|\s*(\d+)\s*/\s*(\d+)\s*\[", line)
