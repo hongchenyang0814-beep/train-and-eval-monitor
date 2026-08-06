@@ -21,7 +21,14 @@ from typing import Any
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = SKILL_ROOT / "assets" / "eval-monitor"
 SYNC_SCRIPT = SKILL_ROOT / "scripts" / "streamlake_experiments.py"
-APP_FILES = ("dashboard.html", "monitor_server.py", "eval_log_parser.py")
+APP_FILES = (
+    "dashboard.html",
+    "monitor_server.py",
+    "eval_log_parser.py",
+    "training_dashboard.html",
+    "training_monitor_server.py",
+)
+TRAINING_CONFIG_TEMPLATE = "training_monitor_config.json"
 TEMPLATE_FILES = ("open_monitor_windows.ps1.template",)
 DEFAULT_TARGET = "~/.local/share/streamlake-eval-monitor"
 DEFAULT_PORT = 18280
@@ -196,7 +203,11 @@ def deploy(args: argparse.Namespace) -> None:
     port = int(args.port)
     if not 1024 <= port <= 65535:
         raise RuntimeError("Port must be between 1024 and 65535")
-    missing = [name for name in (*APP_FILES, *TEMPLATE_FILES) if not (ASSET_DIR / name).is_file()]
+    missing = [
+        name
+        for name in (*APP_FILES, TRAINING_CONFIG_TEMPLATE, *TEMPLATE_FILES)
+        if not (ASSET_DIR / name).is_file()
+    ]
     if missing or not SYNC_SCRIPT.is_file():
         raise RuntimeError(f"Skill package is incomplete: {', '.join(missing) or SYNC_SCRIPT}")
 
@@ -213,6 +224,10 @@ def deploy(args: argparse.Namespace) -> None:
     for name in APP_FILES:
         shutil.copy2(ASSET_DIR / name, target / name)
         os.chmod(target / name, 0o644)
+    training_config = target / TRAINING_CONFIG_TEMPLATE
+    if not training_config.is_file():
+        shutil.copy2(ASSET_DIR / TRAINING_CONFIG_TEMPLATE, training_config)
+        os.chmod(training_config, 0o600)
 
     config = {
         "bind_host": "127.0.0.1",
@@ -222,6 +237,8 @@ def deploy(args: argparse.Namespace) -> None:
         "parser_dir": str(target),
         "cookie_file": str(cookie_dir / "cookie"),
         "project_id_file": str(cookie_dir / "project_id"),
+        "training_config_file": str(training_config),
+        "training_upload_registry_file": str(target / "training_upload_registry.json"),
     }
     atomic_write(config_path(target), json.dumps(config, ensure_ascii=False, indent=2) + "\n", 0o600)
     powershell = (ASSET_DIR / "open_monitor_windows.ps1.template").read_text(encoding="utf-8")
@@ -246,6 +263,7 @@ def show_status(target: Path) -> None:
         "running": owned and health(int(config["port"])),
         "output_dir": config["output_dir"],
         "configured": Path(config["cookie_file"]).is_file() and Path(config["project_id_file"]).is_file(),
+        "training_monitor": Path(config.get("training_config_file", "")).is_file(),
     }
     print(json.dumps(value, ensure_ascii=False, indent=2))
 

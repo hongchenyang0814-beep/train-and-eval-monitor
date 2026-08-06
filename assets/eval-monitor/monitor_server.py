@@ -26,6 +26,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 HERE = Path(__file__).resolve().parent
 DEFAULT_CONFIG = HERE / "monitor_config.json"
 HTML_PATH = HERE / "dashboard.html"
+TRAINING_HTML_PATH = HERE / "training_dashboard.html"
+TRAINING_SERVER_PATH = HERE / "training_monitor_server.py"
+TRAINING_CONFIG_PATH = HERE / "training_monitor_config.json"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 EVALUATION_ID_RE = re.compile(r"eval-task-[A-Za-z0-9-]+")
 PROJECT_ID_RE = re.compile(r"(?:^|/)(proj-[A-Za-z0-9-]+)(?:/|$)")
@@ -47,6 +50,12 @@ def load_config(path: Path) -> dict[str, Any]:
         "parser_dir": str(Path(raw["parser_dir"]).expanduser().resolve()),
         "cookie_file": str(Path(raw["cookie_file"]).expanduser().resolve()),
         "project_id_file": str(Path(raw["project_id_file"]).expanduser().resolve()),
+        "training_config_file": str(
+            Path(raw.get("training_config_file", TRAINING_CONFIG_PATH)).expanduser().resolve()
+        ),
+        "training_upload_registry_file": str(
+            Path(raw.get("training_upload_registry_file", HERE / "training_upload_registry.json")).expanduser().resolve()
+        ),
     }
     if not 1024 <= config["port"] <= 65535:
         raise ValueError("Invalid monitor port")
@@ -110,6 +119,29 @@ def load_parser_module(parser_dir: Path):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def load_training_module(app_dir: Path):
+    module_path = app_dir / "training_monitor_server.py"
+    if not module_path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("streamlake_training_monitor", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("无法加载训练 Monitor 模块")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_training_config(module: Any, config_path: Path, registry_path: Path) -> dict[str, Any] | None:
+    if module is None or not config_path.is_file():
+        return None
+    config = module.load_config(config_path)
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    config["_upload_registry"] = module.load_upload_registry(registry_path)
+    config["_upload_nonce"] = secrets.token_urlsafe(24)
+    return config
 
 
 def nested(mapping: Mapping[str, Any], *keys: str, default: Any = None) -> Any:
@@ -176,6 +208,9 @@ class EvaluationRepository:
             self.analysis_cache_dir / f"{evaluation_id}.meta.json",
         )
 
+    def _summary_cache_path(self, evaluation_id: str) -> Path:
+        return self.analysis_cache_dir / f"{evaluation_id}.summary.json"
+
     def _signature(self, path: Path) -> dict[str, int]:
         stat = path.stat()
         return {
@@ -225,6 +260,71 @@ class EvaluationRepository:
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return False
 
+    def _analysis_summary_payload(self, parsed: Mapping[str, Any]) -> dict[str, Any]:
+        tasks: dict[str, dict[str, Any]] = {}
+        for task in parsed.get("tasks", []):
+            if not isinstance(task, Mapping):
+                continue
+            key = str(task.get("key", ""))
+            if not key:
+                continue
+            tasks[key] = {
+                "label": task.get("label", key),
+                "group": task.get("group", ""),
+                "sample_count": task.get("sample_count"),
+                "example_count": task.get("example_count"),
+                "generation_seconds": task.get("generation_seconds"),
+                "automatic_metrics": task.get("automatic_metrics", {}),
+            }
+        return {
+            "summary": parsed.get("summary", {}),
+            "automatic_metrics": parsed.get("automatic_metrics", {}),
+            "tasks": tasks,
+            "sample_count": len(parsed.get("samples", [])),
+        }
+
+    def _write_analysis_summary(
+        self,
+        evaluation_id: str,
+        signature: Mapping[str, int],
+        parsed: Mapping[str, Any],
+    ) -> None:
+        self.analysis_cache_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.analysis_cache_dir, 0o700)
+        payload = {
+            "cache_version": ANALYSIS_CACHE_VERSION,
+            "signature": dict(signature),
+            "analysis": self._analysis_summary_payload(parsed),
+        }
+        atomic_write_secret(
+            self._summary_cache_path(evaluation_id),
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        )
+
+    def _read_analysis_summary(
+        self,
+        evaluation_id: str,
+        signature: Mapping[str, int],
+        *,
+        migrate_full_cache: bool = False,
+    ) -> dict[str, Any] | None:
+        summary_path = self._summary_cache_path(evaluation_id)
+        if summary_path.is_file():
+            try:
+                payload = json.loads(summary_path.read_text(encoding="utf-8"))
+                if payload.get("cache_version") == ANALYSIS_CACHE_VERSION and payload.get("signature") == signature:
+                    analysis = payload.get("analysis")
+                    return analysis if isinstance(analysis, dict) else None
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+        if not migrate_full_cache:
+            return None
+        parsed = self._read_persistent_cache(evaluation_id, signature)
+        if parsed is None:
+            return None
+        self._write_analysis_summary(evaluation_id, signature, parsed)
+        return self._analysis_summary_payload(parsed)
+
     def _write_persistent_cache(
         self,
         evaluation_id: str,
@@ -255,6 +355,7 @@ class EvaluationRepository:
                     separators=(",", ":"),
                 ),
             )
+            self._write_analysis_summary(evaluation_id, signature, parsed)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -292,6 +393,27 @@ class EvaluationRepository:
                 }
             )
         return result
+
+    def ranking_rows(self) -> list[dict[str, Any]]:
+        rows = self.list_evaluations()
+        for row in rows:
+            log_path = self._log_path(row["id"])
+            row["analysis_summary"] = None
+            if not log_path.is_file():
+                continue
+            signature = self._signature(log_path)
+            with self.lock:
+                cached = self.cache.get(row["id"])
+                parsed = cached["parsed"] if cached and cached["signature"] == signature else None
+            if parsed is not None:
+                row["analysis_summary"] = self._analysis_summary_payload(parsed)
+                continue
+            row["analysis_summary"] = self._read_analysis_summary(
+                row["id"],
+                signature,
+                migrate_full_cache=True,
+            )
+        return rows
 
     def _analysis(self, evaluation_id: str) -> dict[str, Any]:
         path = self._log_path(evaluation_id)
@@ -585,7 +707,26 @@ class EvalMonitorServer(ThreadingHTTPServer):
         self.repository = EvaluationRepository(Path(config["output_dir"]), parser)
         self.analysis_manager = AnalysisManager(self.repository)
         self.sync_manager = SyncManager(config, self.analysis_manager.ensure_started)
+        self.training_module = load_training_module(HERE)
+        self.training_upload_lock = threading.Lock()
+        self.training_upload_registry_path = Path(config["training_upload_registry_file"])
+        self.training_config = load_training_config(
+            self.training_module,
+            Path(config["training_config_file"]),
+            self.training_upload_registry_path,
+        )
         self.analysis_manager.ensure_started()
+
+    def record_training_upload(self, experiment_id: str, checkpoint_name: str, record: dict[str, Any]) -> None:
+        if self.training_module is None or self.training_config is None:
+            raise RuntimeError("训练 Monitor 未启用")
+        registry = self.training_config["_upload_registry"]
+        registry["uploads"].setdefault(experiment_id, {})[checkpoint_name] = record
+        self.training_module.save_upload_registry(self.training_upload_registry_path, registry)
+
+    def rotate_training_upload_nonce(self) -> None:
+        if self.training_config is not None:
+            self.training_config["_upload_nonce"] = secrets.token_urlsafe(24)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -643,11 +784,163 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("请求必须是 JSON 对象")
         return value
 
+    def _read_small_json(self) -> dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise ValueError("请求长度无效") from error
+        if length <= 0 or length > 4096:
+            raise ValueError("请求内容为空或过大")
+        value = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("请求必须是 JSON 对象")
+        return value
+
     def _require_token(self) -> bool:
         if secrets.compare_digest(self.headers.get("X-Eval-Monitor-Token", ""), self.app.token):
             return True
         self._error(HTTPStatus.FORBIDDEN, "页面令牌无效，请刷新后重试")
         return False
+
+    def _training_ready(self) -> bool:
+        if self.app.training_module is not None and self.app.training_config is not None:
+            return True
+        self._error(HTTPStatus.NOT_FOUND, "训练 Monitor 未部署或配置缺失")
+        return False
+
+    def _training_upload_checkpoint(self, payload: dict[str, Any]) -> dict[str, Any]:
+        module = self.app.training_module
+        config = self.app.training_config
+        if module is None or config is None:
+            raise FileNotFoundError("训练 Monitor 未部署或配置缺失")
+        allowed_keys = {"experiment_id", "checkpoint_name"}
+        if set(payload) - allowed_keys:
+            raise ValueError("unsupported upload parameters")
+        experiment_id = payload.get("experiment_id")
+        checkpoint_name = payload.get("checkpoint_name")
+        if not isinstance(experiment_id, str) or not isinstance(checkpoint_name, str):
+            raise ValueError("experiment_id and checkpoint_name are required")
+        target = next((item for item in module.discover_targets(config) if item["id"] == experiment_id), None)
+        if target is None:
+            raise ValueError("selected experiment is not available")
+        if not target.get("enable_upload"):
+            raise ValueError("upload is disabled for this experiment")
+        existing = config.get("_upload_registry", {}).get("uploads", {}).get(experiment_id, {}).get(checkpoint_name)
+        if isinstance(existing, dict):
+            raise module.UploadConflictError(
+                f"checkpoint was already uploaded: {existing.get('repo_url', existing.get('repo_id'))}"
+            )
+        required = ("hub_endpoint", "hub_owner", "hub_repo_prefix", "base_model_id", "config_path")
+        if any(not target.get(field) for field in required):
+            raise ValueError("upload configuration is incomplete")
+        output_dir = Path(target["output_dir"]).resolve()
+        checkpoint_dir = (output_dir / checkpoint_name).resolve()
+        match = module.CHECKPOINT_RE.fullmatch(checkpoint_name)
+        if not match or checkpoint_dir.parent != output_dir or not checkpoint_dir.is_dir():
+            raise ValueError("selected checkpoint is not available")
+        run_id = str(target.get("run_id") or output_dir.name)
+        if not module.RUN_ID_RE.fullmatch(run_id):
+            raise ValueError("run_id must contain only letters, numbers, underscores, and hyphens")
+        config_path = Path(str(target["config_path"])).resolve()
+        if not config_path.is_file():
+            raise ValueError("training config file is not available")
+        step = int(match.group(1))
+        repo_id = module.evaluation_repo_id(target, run_id, step)
+        with tempfile.TemporaryDirectory(prefix="train-monitor-upload-") as temporary:
+            staged_dir = Path(temporary)
+            files, total_bytes = module.stage_checkpoint_upload(
+                checkpoint_dir=checkpoint_dir,
+                config_path=config_path,
+                staged_dir=staged_dir,
+                base_model_id=str(target["base_model_id"]),
+                run_id=run_id,
+                step=step,
+            )
+            try:
+                from huggingface_hub import HfApi
+            except ImportError as error:
+                raise RuntimeError("huggingface_hub is not installed in the monitor environment") from error
+            api = HfApi(endpoint=str(target["hub_endpoint"]))
+            api.create_repo(
+                repo_id=repo_id,
+                repo_type="model",
+                private=bool(target.get("hub_private_repo", True)),
+                exist_ok=True,
+            )
+            result = api.upload_folder(
+                repo_id=repo_id,
+                repo_type="model",
+                folder_path=str(staged_dir),
+                commit_message=f"Upload LoRA SFT {run_id} step-{step:05d}",
+            )
+            index_warning = None
+            if target.get("hub_index_repo_id"):
+                try:
+                    module.update_evaluation_index(
+                        api,
+                        str(target["hub_index_repo_id"]),
+                        {"run_id": run_id, "step": step, "repo_id": repo_id},
+                    )
+                except Exception as error:
+                    index_warning = "evaluation repository was uploaded, but the archive index was not updated"
+                    sys.stderr.write(f"Evaluation index update failed: {error!r}\n")
+        commit_id = getattr(result, "oid", None) or getattr(result, "commit_id", None)
+        upload_record = {
+            "repo_id": repo_id,
+            "repo_url": f"https://huggingface.co/{repo_id}",
+            "run_id": run_id,
+            "step": step,
+            "uploaded_at": datetime.now().timestamp(),
+        }
+        self.app.record_training_upload(experiment_id, checkpoint_name, upload_record)
+        return {
+            "ok": True,
+            "repo_id": repo_id,
+            "repo_url": f"https://huggingface.co/{repo_id}",
+            "remote_path": "/",
+            "commit_id": commit_id,
+            "commit_url": getattr(result, "commit_url", None),
+            "files": files,
+            "bytes": total_bytes,
+            "index_warning": index_warning,
+        }
+
+    def _handle_training_upload_payload(self, payload: dict[str, Any]) -> None:
+        if not self._training_ready():
+            return
+        if not self.app.training_upload_lock.acquire(blocking=False):
+            self._error(HTTPStatus.CONFLICT, "another upload is already in progress")
+            return
+        conflict_error = self.app.training_module.UploadConflictError  # type: ignore[union-attr]
+        try:
+            result = self._training_upload_checkpoint(payload)
+            self.app.rotate_training_upload_nonce()
+            self._json(result)
+        except Exception as error:
+            if isinstance(error, conflict_error):
+                self._error(HTTPStatus.CONFLICT, str(error))
+            elif isinstance(error, ValueError):
+                self._error(HTTPStatus.BAD_REQUEST, str(error))
+            else:
+                sys.stderr.write(f"Upload failed: {error!r}\n")
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "upload failed; inspect monitor_server.log")
+        finally:
+            self.app.training_upload_lock.release()
+
+    def _training_upload_from_query(self, query: dict[str, list[str]]) -> None:
+        if not self._training_ready():
+            return
+        allowed = {"experiment_id", "checkpoint_name", "nonce"}
+        if set(query) != allowed or any(len(values) != 1 for values in query.values()):
+            self._error(HTTPStatus.BAD_REQUEST, "invalid upload query")
+            return
+        expected = self.app.training_config.get("_upload_nonce", "") if self.app.training_config else ""
+        if not isinstance(expected, str) or not secrets.compare_digest(query["nonce"][0], expected):
+            self._error(HTTPStatus.FORBIDDEN, "invalid or expired upload nonce")
+            return
+        self._handle_training_upload_payload(
+            {"experiment_id": query["experiment_id"][0], "checkpoint_name": query["checkpoint_name"][0]}
+        )
 
     def _config_status(self) -> dict[str, Any]:
         cookie_path = Path(self.app.config["cookie_file"])
@@ -672,8 +965,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._headers("text/html; charset=utf-8", len(raw))
                 self.wfile.write(raw)
                 return
+            if path in ("/train", "/train/", "/train/index.html"):
+                raw = TRAINING_HTML_PATH.read_bytes()
+                self._headers("text/html; charset=utf-8", len(raw))
+                self.wfile.write(raw)
+                return
             if path == "/api/health":
                 self._json({"status": "ok"})
+                return
+            if path == "/train/api/health":
+                self._json({
+                    "status": "ok" if self.app.training_config is not None else "unconfigured",
+                    "monitor": "training",
+                })
+                return
+            if path == "/train/api/snapshot":
+                if not self._training_ready():
+                    return
+                self._json(self.app.training_module.build_snapshot(self.app.training_config))  # type: ignore[union-attr,arg-type]
+                return
+            if path == "/train/api/upload":
+                try:
+                    upload_query = parse_qs(
+                        parsed.query,
+                        keep_blank_values=True,
+                        strict_parsing=True,
+                        max_num_fields=3,
+                    )
+                except ValueError:
+                    self._error(HTTPStatus.BAD_REQUEST, "invalid upload query")
+                    return
+                self._training_upload_from_query(upload_query)
                 return
             if path == "/api/snapshot":
                 state_path = Path(self.app.config["output_dir"]) / "sync_state.json"
@@ -684,8 +1006,16 @@ class Handler(BaseHTTPRequestHandler):
                     "sync": self.app.sync_manager.snapshot(),
                     "analysis_cache": self.app.analysis_manager.snapshot(),
                     "sync_state": sync_state,
+                    "runtime": {
+                        "output_dir": self.app.config["output_dir"],
+                        "training_config_file": self.app.config.get("training_config_file", ""),
+                        "training_monitor": self.app.training_config is not None,
+                    },
                     "evaluations": self.app.repository.list_evaluations(),
                 })
+                return
+            if path == "/api/rankings":
+                self._json({"rows": self.app.repository.ranking_rows()})
                 return
             match = re.fullmatch(r"/api/evaluations/([^/]+)", path)
             if match:
@@ -727,9 +1057,15 @@ class Handler(BaseHTTPRequestHandler):
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, f"服务器错误：{error}")
 
     def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/train/api/upload":
+            try:
+                self._handle_training_upload_payload(self._read_small_json())
+            except (ValueError, json.JSONDecodeError) as error:
+                self._error(HTTPStatus.BAD_REQUEST, str(error))
+            return
         if not self._require_token():
             return
-        parsed = urlparse(self.path)
         try:
             if parsed.path == "/api/config":
                 payload = self._read_json()

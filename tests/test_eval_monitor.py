@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,27 @@ class FakeParser:
     def parse_log(self, text, filename, size):
         self.calls += 1
         return {"source": {"filename": filename, "file_size": size}, "samples": [], "filtered_text": text}
+
+
+class RankingParser(FakeParser):
+    def parse_log(self, text, filename, size):
+        self.calls += 1
+        auto = {
+            "sample_count": 1,
+            "copy_answer": {
+                "think": {"direct_copy_rate": 0.2},
+                "no_think": {"direct_copy_rate": 0.1},
+            },
+            "think_no_think_overlap": {"overlap_rate": 0.4},
+        }
+        return {
+            "source": {"filename": filename, "file_size": size},
+            "summary": {"sample_detail_count": 1},
+            "samples": [{"id": "1", "task": "challenge_recommendation_video"}],
+            "tasks": [{"key": "challenge_recommendation_video", "automatic_metrics": auto}],
+            "automatic_metrics": {"challenge_recommendation_video": auto},
+            "filtered_text": text,
+        }
 
 
 def free_port():
@@ -93,17 +115,31 @@ class EvalMonitorDeploymentTests(unittest.TestCase):
         self.assertTrue(value["running"])
         self.assertFalse(value["configured"])
         self.assertEqual(value["port"], self.port)
+        self.assertTrue(value["training_monitor"])
 
         config = json.loads((self.target / "monitor_config.json").read_text(encoding="utf-8"))
         self.assertEqual(config["bind_host"], "127.0.0.1")
         self.assertEqual(config["output_dir"], str(self.output))
         self.assertEqual(config["cookie_file"], str(self.target / "config" / "cookie"))
         self.assertEqual(config["project_id_file"], str(self.target / "config" / "project_id"))
+        self.assertEqual(config["training_config_file"], str(self.target / "training_monitor_config.json"))
+        self.assertEqual(config["training_upload_registry_file"], str(self.target / "training_upload_registry.json"))
         self.assertTrue((self.target / "config").is_dir())
         self.assertTrue((self.target / "dashboard.html").is_file())
         self.assertTrue((self.target / "eval_log_parser.py").is_file())
+        self.assertTrue((self.target / "training_dashboard.html").is_file())
+        self.assertTrue((self.target / "training_monitor_server.py").is_file())
+        self.assertTrue((self.target / "training_monitor_config.json").is_file())
         self.assertIn(str(self.port), (self.target / "open_monitor_windows.ps1").read_text(encoding="utf-8"))
         self.assertFalse((self.home / ".config" / "streamlake" / "cookie").exists())
+
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/train/") as response:
+            training_html = response.read().decode("utf-8")
+        self.assertIn("OneRec Training Monitor", training_html)
+        self.assertIn('href="/"', training_html)
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/train/api/health") as response:
+            training_health = json.load(response)
+        self.assertEqual(training_health["monitor"], "training")
 
     def test_monitor_streams_complete_log_as_browser_attachment(self):
         result = self.run_tool(
@@ -141,6 +177,7 @@ class EvalMonitorDeploymentTests(unittest.TestCase):
         self.assertEqual(config["output_dir"], str(self.target / "data"))
         self.assertEqual(config["cookie_file"], str(self.target / "config" / "cookie"))
         self.assertEqual(config["project_id_file"], str(self.target / "config" / "project_id"))
+        self.assertEqual(config["training_config_file"], str(self.target / "training_monitor_config.json"))
 
 
 class EvalMonitorAnalysisCacheTests(unittest.TestCase):
@@ -171,6 +208,52 @@ class EvalMonitorAnalysisCacheTests(unittest.TestCase):
             self.assertEqual(state["loaded"], 1)
             self.assertEqual(parser.calls, 1)
             self.assertIn(evaluation_id, restarted.cache)
+
+    def test_ranking_rows_reuse_analysis_summary_without_reparsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evaluation_id = "eval-task-ranking-1"
+            log_path = root / "logs" / evaluation_id / "evaluation.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text("ranking analysis", encoding="utf-8")
+            raw_json = {
+                "detail": {
+                    "taskStatus": "SUCCEEDED",
+                    "modelName": "ranking-model",
+                    "metrics": {
+                        "metrics": {
+                            "summary": {"totalScore": 1.23, "r0": 0.1, "r1": 0.2, "r2": 0.3, "r3": 0.4}
+                        }
+                    },
+                }
+            }
+            with sqlite3.connect(root / "experiments.sqlite") as connection:
+                connection.execute(
+                    "CREATE TABLE experiments (experiment_type TEXT NOT NULL,id TEXT NOT NULL,name TEXT NOT NULL,status TEXT,created_at TEXT,updated_at TEXT,raw_path TEXT NOT NULL,raw_json TEXT NOT NULL,PRIMARY KEY (experiment_type,id))"
+                )
+                connection.execute(
+                    "INSERT INTO experiments VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        "evaluation",
+                        evaluation_id,
+                        "ranking run",
+                        "SUCCEEDED",
+                        "2026-08-05T00:00:00Z",
+                        "2026-08-05T00:10:00Z",
+                        "raw/ranking.json",
+                        json.dumps(raw_json),
+                    ),
+                )
+            parser = RankingParser()
+            first = monitor.EvaluationRepository(root, parser)
+            self.assertEqual(first._analysis(evaluation_id)["summary"]["sample_detail_count"], 1)
+            self.assertTrue((root / "analysis_cache" / f"{evaluation_id}.summary.json").is_file())
+            restarted = monitor.EvaluationRepository(root, parser)
+            rows = restarted.ranking_rows()
+            self.assertEqual(parser.calls, 1)
+            self.assertEqual(rows[0]["score"], 1.23)
+            self.assertEqual(rows[0]["analysis_summary"]["sample_count"], 1)
+            self.assertIn("challenge_recommendation_video", rows[0]["analysis_summary"]["automatic_metrics"])
 
 
 class EvalLogParserTests(unittest.TestCase):
@@ -227,6 +310,12 @@ Updated sample metrics to:
         self.assertIn("/download-log", dashboard)
         self.assertIn("state.tab!=='log'", dashboard)
         self.assertIn("正在加载评测数据", dashboard)
+        self.assertIn('data-tab="tools"', dashboard)
+        self.assertIn('data-tab="rankings"', dashboard)
+        self.assertIn("Skill CLI 能力", dashboard)
+        self.assertIn("推荐平均 · Think 抄答率", dashboard)
+        self.assertIn("/api/rankings", dashboard)
+        self.assertIn('href="/train/"', dashboard)
 
     def test_dashboard_groups_samples_and_shows_task_workload(self):
         dashboard = (ROOT / "assets" / "eval-monitor" / "dashboard.html").read_text(encoding="utf-8")
@@ -238,6 +327,12 @@ Updated sample metrics to:
         self.assertIn("sample-task-title", dashboard)
         for group in ("懂物料", "懂用户", "懂推荐", "懂世界"):
             self.assertIn(group, dashboard)
+
+    def test_training_dashboard_has_workspace_switcher(self):
+        dashboard = (ROOT / "assets" / "eval-monitor" / "training_dashboard.html").read_text(encoding="utf-8")
+        self.assertIn("OneRec Training Monitor", dashboard)
+        self.assertIn('href="/"', dashboard)
+        self.assertIn('href="/train/"', dashboard)
 
 
 if __name__ == "__main__":

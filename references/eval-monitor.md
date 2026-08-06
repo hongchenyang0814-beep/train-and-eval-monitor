@@ -1,4 +1,4 @@
-# Evaluation Monitor
+# Unified Evaluation / Training Monitor
 
 ## Commands
 
@@ -8,7 +8,7 @@ Set the lifecycle script path:
 MONITOR_TOOL="$HOME/.codex/skills/streamlake-experiment-analyst/scripts/eval_monitor.py"
 ```
 
-Deploy or upgrade the bundled app, create the local cache directory, and start a detached loopback-only server:
+Deploy or upgrade the bundled app, create the local cache directory, and start a detached loopback-only server. The same server exposes `/` for evaluation-log analysis and `/train/` for the local training monitor:
 
 ```bash
 python "$MONITOR_TOOL" deploy
@@ -31,7 +31,7 @@ python "$MONITOR_TOOL" stop
 python "$MONITOR_TOOL" start
 ```
 
-Re-run `deploy` after updating the skill. It replaces only managed application files and `monitor_config.json`; it does not delete the experiment cache or credentials.
+Re-run `deploy` after updating the skill. It replaces only managed application files and `monitor_config.json`; it does not delete the experiment cache or credentials. The training monitor runtime config is `<target-dir>/training_monitor_config.json`; it is created on first deploy and then preserved across upgrades so user-specific output roots, explicit targets, and optional Hugging Face upload settings are not overwritten.
 
 ## First configuration
 
@@ -65,7 +65,7 @@ Replace `USER` with the remote login name and `SERVER` with the server hostname 
 ssh -p SSH_PORT -N -L 18280:127.0.0.1:18280 USER@SERVER_IP
 ```
 
-Keep that terminal running, then open `http://127.0.0.1:18280/` in the local browser. Closing the SSH command closes the tunnel but does not stop the remote Monitor.
+Keep that terminal running, then open `http://127.0.0.1:18280/` in the local browser for evaluation logs or `http://127.0.0.1:18280/train/` for training. Closing the SSH command closes the tunnel but does not stop the remote Monitor.
 
 A personal SSH alias works only on a computer whose SSH config already defines it. For example, Windows uses `%USERPROFILE%\.ssh\config`, while Linux and macOS use `~/.ssh/config`:
 
@@ -96,12 +96,15 @@ Pass `-SshPort PORT` only when the SSH port is not already defined in `~/.ssh/co
 ## Behavior
 
 - The left list and sample detail panes scroll independently.
+- The top workspace switcher opens the evaluation-log page (`/`) and training page (`/train/`) on the same loopback server and SSH tunnel.
 - Completed evaluations expose platform scores, 11 tasks, parsed samples, Think/No-think outputs, filtered logs, and comparisons. Task rows show displayed samples, generation requests, and generation time; the sample browser groups its 11 tasks under 懂物料, 懂用户, 懂推荐, and 懂世界.
+- The ranking tab sorts all synchronized evaluations by total score, family scores, sample count, and cached local automatic metrics such as recommendation copy-answer rate, Think/No-think SID overlap, action hallucination rate, repeated SID rate, and loop output count. Risk-style metrics default to ascending order.
+- The training page reuses the local training Monitor: it reads `trainer_log.jsonl`, GPU state from `nvidia-smi`, explicit PIDs, checkpoint directories, run manifests, recent logs, and optional configured Hugging Face upload targets. It does not stop training or delete files.
 - The Log tab downloads the selected evaluation's complete original log to the browser device. The server streams the file without a size limit, and browser settings determine its final local path.
 - Multi-output samples show one output body per mode. Selectors use 16 columns in a wide pane and 8 columns below the container threshold.
 - Running evaluations remain visible without requesting output until `hasOutput=true`.
 - The Sync button invokes the bundled `streamlake_experiments.py sync`, including the 2026-08-01 cutoff and complete-log download rules.
-- Each successful sync starts background analysis only for new or changed logs. Full parsed results are stored as compressed files under `<output-dir>/analysis_cache`; the cache is reused after service restarts and invalidated only when the log size/mtime or parser version changes.
+- Each successful sync starts background analysis only for new or changed logs. Full parsed results and lightweight ranking summaries are stored under `<output-dir>/analysis_cache`; the cache is reused after service restarts and invalidated only when the log size/mtime or parser version changes.
 - Opening or polling the page does not start batch analysis, and the interface does not display analysis-cache progress. Opening an uncached evaluation still analyzes and persists that individual log on demand.
 
 ## Troubleshooting
@@ -111,3 +114,4 @@ Pass `-SshPort PORT` only when the SSH port is not already defined in `~/.ssh/co
 - `running: false`: inspect `<target-dir>/monitor_server.log`, then run `start`.
 - Port conflict: re-run `deploy --port ANOTHER_PORT` and use the same remote port in the SSH tunnel.
 - A running evaluation has no log: this is expected until a later sync observes `hasOutput=true`.
+- No training runs shown: edit `<target-dir>/training_monitor_config.json` and set `outputs_roots` or explicit `targets`, then restart the Monitor.

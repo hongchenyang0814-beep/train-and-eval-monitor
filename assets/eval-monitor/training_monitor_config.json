@@ -1,0 +1,11 @@
+{
+  "bind_host": "127.0.0.1",
+  "port": 18280,
+  "refresh_seconds": 30,
+  "stale_after_seconds": 600,
+  "max_scan_depth": 3,
+  "outputs_roots": [
+    "/root/output"
+  ],
+  "targets": []
+}

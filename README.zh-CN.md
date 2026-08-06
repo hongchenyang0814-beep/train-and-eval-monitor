@@ -18,7 +18,9 @@
 - 比较指标差值、缺失指标和训练参数差异。
 - 脱敏 Cookie/JWT/签名 URL，排除二进制与大文本内容。
 - 只允许 StreamLake 官方域名上的只读查询端点。
-- 一条命令部署本地评测日志 Monitor，支持平台配置、同步、11 个子任务、Think/No-think 样本、多输出切换、日志分页和评测对比；即使日志里出现未收录的 `challenge_itemic_*`、`challenge_evolution_*`、`challenge_recommendation_*` 或 `challenge_common_sense` 变体，也会按家族兜底归类。
+- 一条命令部署统一 Monitor：`/` 是评测日志分析页，`/train/` 是本地 LLaMA-Factory 训练监控页。
+- 训练页读取本地 `trainer_log.jsonl`、GPU 状态、checkpoint、run manifest 和最近日志；可选 Hugging Face checkpoint 上传只通过运行目录里的 `training_monitor_config.json` 配置，不写进 skill 源码。
+- 评测页支持平台配置、同步、11 个子任务、Think/No-think 样本、多输出切换、完整日志下载、评测对比，以及按平台分数或缓存本地自动指标做全局排行；即使日志里出现未收录的 `challenge_itemic_*`、`challenge_evolution_*`、`challenge_recommendation_*` 或 `challenge_common_sense` 变体，也会按家族兜底归类。
 - 每次同步成功后只在后台分析新增或变化的日志，完整解析结果压缩保存到 `<output-dir>/analysis_cache`；页面打开不触发批量分析，也不显示缓存进度，后续页面或服务重启直接复用有效缓存。
 
 ## 安装
@@ -88,7 +90,7 @@ python "$TOOL" compare 实验ID1 实验ID2 \
 python "$TOOL" context
 ```
 
-### 部署评测日志 Monitor
+### 部署统一 Monitor
 
 ```bash
 MONITOR_TOOL="$HOME/.codex/skills/streamlake-experiment-analyst/scripts/eval_monitor.py"
@@ -102,7 +104,9 @@ python "$MONITOR_TOOL" stop
 python "$MONITOR_TOOL" start
 ```
 
-首次打开网页后，按设置弹窗说明从 StreamLake 开发者工具复制完整请求头并粘贴保存。服务自动提取 Cookie 和 project ID，不会在页面回显 Cookie。
+首次打开网页后，在评测页按设置弹窗说明从 StreamLake 开发者工具复制完整请求头并粘贴保存。服务自动提取 Cookie 和 project ID，不会在页面回显 Cookie。顶部切换栏可打开 `/train/` 训练监控页。
+
+训练页默认运行配置是 `~/.local/share/streamlake-eval-monitor/training_monitor_config.json`，初始扫描 `/root/output`。如需自定义训练输出目录、显式 PID/日志路径或 Hugging Face 上传参数，请修改这个运行目录中的配置文件；不要把个人配置提交到 skill 源码。
 
 先在服务器执行上面的 `deploy`。然后在运行浏览器的当前设备上新开终端并保持 SSH 隧道运行，不要在远端 SSH 会话中执行：
 

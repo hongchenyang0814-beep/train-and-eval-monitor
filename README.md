@@ -22,7 +22,9 @@ A Codex skill and dependency-free Python CLI for synchronizing StreamLake Wanqin
 - Metric deltas, missing-value handling, parameter differences, and experiment-ID resolution.
 - Credential redaction, signed-URL cleanup, large-body omission, endpoint allowlists, and same-host redirect enforcement.
 - No third-party Python dependencies.
-- One-command deployment of a loopback-only evaluation-log Monitor with platform configuration, synchronization, task and sample analysis, multi-output switching, filtered logs, complete-original-log browser downloads, and run comparison.
+- One-command deployment of a loopback-only unified Monitor: `/` for evaluation-log analysis and `/train/` for the local LLaMA-Factory training monitor.
+- The training tab reads local `trainer_log.jsonl`, GPU state, checkpoints, run manifests, and recent logs; optional Hugging Face checkpoint upload is configured only in the runtime `training_monitor_config.json`, not in the skill source.
+- The evaluation tab supports platform configuration, synchronization, 11 structured tasks, Think/No-think samples, complete-log download, pairwise comparison, and global ranking by platform scores or cached local automatic metrics.
 - Task binding falls back to task-family prefixes, so unfamiliar `challenge_itemic_*`, `challenge_evolution_*`, `challenge_recommendation_*`, and `challenge_common_sense` aliases still stay in the right family.
 - Incremental background analysis after each successful sync, limited to new or changed logs, with compressed persistent results under `<output-dir>/analysis_cache`; page loads do not trigger batch analysis or display cache progress, and valid caches are reused across page loads and service restarts.
 
@@ -97,7 +99,7 @@ python "$TOOL" context
 
 Use `sync --log-dir PATH` to override the automatic log root. Downloaded, reused, and failed log counts are stored in `sync_state.json` under `log_downloads`; both `error_count` and `log_downloads.error_count` must be zero for complete metadata and log coverage.
 
-### Deploy the evaluation-log Monitor
+### Deploy the unified Monitor
 
 ```bash
 MONITOR_TOOL="$HOME/.codex/skills/streamlake-experiment-analyst/scripts/eval_monitor.py"
@@ -110,7 +112,9 @@ python "$MONITOR_TOOL" stop
 python "$MONITOR_TOOL" start
 ```
 
-On first use, open the settings dialog and paste complete request headers copied from the authenticated StreamLake browser session. The server extracts the Cookie and project ID without echoing the Cookie.
+On first use, open the settings dialog on the evaluation tab and paste complete request headers copied from the authenticated StreamLake browser session. The server extracts the Cookie and project ID without echoing the Cookie. Use the top switcher to open the training tab at `/train/`.
+
+The training tab default runtime config is `~/.local/share/streamlake-eval-monitor/training_monitor_config.json`; it initially scans `/root/output`. Edit that runtime file to add output roots, explicit targets, PID/log paths, or optional Hugging Face upload settings.
 
 Run `deploy` on the server. Then run the tunnel in a new terminal on the computer where the browser runs, not inside the remote SSH shell:
 

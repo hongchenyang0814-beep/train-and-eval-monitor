@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OneRec Training Monitor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090d0f;
+      --surface: #101619;
+      --surface-2: #151d20;
+      --line: #293438;
+      --line-strong: #3b4a4f;
+      --text: #e4ecea;
+      --muted: #889795;
+      --cyan: #35d7c8;
+      --green: #9be15d;
+      --amber: #efbd5b;
+      --red: #ff6b6b;
+      --blue: #74a7ff;
+      --panel-pad: 16px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+    body {
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+      background-image:
+        linear-gradient(rgba(77, 100, 103, .055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(77, 100, 103, .055) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+    button, select, input { font: inherit; letter-spacing: 0; }
+    button, select, input[type="search"] {
+      min-height: 36px;
+      color: var(--text);
+      background: var(--surface-2);
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+    }
+    button { padding: 7px 12px; cursor: pointer; }
+    button:hover, button:focus-visible, select:focus-visible, input:focus-visible { border-color: var(--cyan); outline: none; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    a { color: var(--cyan); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .shell { width: min(1920px, 100%); margin: 0 auto; min-height: 100vh; }
+    .topbar {
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 10px 18px;
+      background: rgba(9, 13, 15, .95);
+      border-bottom: 1px solid var(--line-strong);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    .brand { min-width: 235px; }
+    .brand strong { display: block; font-size: 18px; font-weight: 680; color: #fff; }
+    .brand span, .server-meta { color: var(--muted); font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .workspace-tabs { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--line); background: #0d1214; }
+    .workspace-tab { min-height: 32px; display: inline-flex; align-items: center; padding: 0 12px; border: 1px solid transparent; color: var(--muted); text-decoration: none; font-size: 12px; }
+    .workspace-tab:hover, .workspace-tab:focus-visible { color: var(--text); border-color: var(--line-strong); outline: none; text-decoration: none; }
+    .workspace-tab.active { color: #071110; background: var(--cyan); border-color: var(--cyan); font-weight: 700; }
+    .server-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .connection { display: flex; align-items: center; gap: 8px; white-space: nowrap; color: var(--muted); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 10px currentColor; }
+    .dot.online { color: var(--green); background: var(--green); }
+    .dot.offline { color: var(--red); background: var(--red); }
+    .stats {
+      position: sticky;
+      top: 64px;
+      z-index: 19;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(130px, 1fr));
+      border-bottom: 1px solid var(--line);
+      background: rgba(16, 22, 25, .94);
+    }
+    .stat { padding: 12px 18px; border-right: 1px solid var(--line); min-width: 0; }
+    .stat:last-child { border-right: 0; }
+    .label { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    .value { margin-top: 3px; font: 600 21px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .workspace { display: grid; grid-template-columns: 290px minmax(480px, 1fr) 320px; min-height: calc(100vh - 138px); }
+    .experiments, .inspector { background: rgba(13, 18, 20, .97); }
+    .experiments {
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      contain: size;
+      border-right: 1px solid var(--line);
+    }
+    .inspector { border-left: 1px solid var(--line); }
+    .section-head { padding: 14px var(--panel-pad); border-bottom: 1px solid var(--line); }
+    .section-title { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .section-title h2 { margin: 0; font-size: 12px; font-weight: 650; text-transform: uppercase; }
+    .section-title span { color: var(--muted); font-size: 11px; }
+    .search { width: 100%; margin-top: 12px; padding: 7px 10px; }
+    .experiment-list { flex: 1 1 auto; min-height: 0; padding: 8px; overflow-y: auto; overflow-x: hidden; }
+    .experiment-group { min-width: 0; border-bottom: 1px solid var(--line); }
+    .experiment-group:last-child { border-bottom: 0; }
+    .group-toggle {
+      position: sticky;
+      top: -8px;
+      z-index: 2;
+      width: calc(100% + 16px);
+      margin: 0 -8px;
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 16px;
+      text-align: left;
+      background: rgba(13, 18, 20, .97);
+      border-color: transparent;
+      box-shadow: 0 1px 0 var(--line);
+    }
+    .group-toggle:hover { background: var(--surface-2); }
+    .group-chevron { width: 0; height: 0; border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-left: 6px solid var(--muted); transition: transform .15s ease; }
+    .group-toggle[aria-expanded="true"] .group-chevron { transform: rotate(90deg); }
+    .group-name { min-width: 0; overflow-wrap: anywhere; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .group-count { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .group-items { display: grid; gap: 6px; padding-bottom: 8px; }
+    .group-items[hidden] { display: none; }
+    .experiment-subgroup { min-width: 0; border-top: 1px solid var(--line); }
+    .subgroup-toggle {
+      position: sticky;
+      top: 30px;
+      z-index: 1;
+      width: calc(100% + 16px);
+      margin: 0 -8px;
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 16px;
+      text-align: left;
+      background: rgba(13, 18, 20, .97);
+      border-color: transparent;
+      box-shadow: 0 1px 0 var(--line);
+    }
+    .subgroup-toggle:hover { background: var(--surface-2); }
+    .subgroup-chevron { width: 0; height: 0; border-top: 3px solid transparent; border-bottom: 3px solid transparent; border-left: 5px solid var(--muted); transition: transform .15s ease; }
+    .subgroup-toggle[aria-expanded="true"] .subgroup-chevron { transform: rotate(90deg); }
+    .subgroup-name { min-width: 0; color: #b7c5c2; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .subgroup-count { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .subgroup-items { display: grid; gap: 6px; margin: 0 0 8px 13px; padding: 10px 0 0 7px; border-left: 1px solid var(--line); }
+    .subgroup-items[hidden] { display: none; }
+    .subgroup-empty { padding: 7px 0; color: var(--muted); font-size: 11px; }
+    .experiment-item { width: 100%; text-align: left; padding: 11px; background: transparent; border-color: transparent; }
+    .experiment-item:hover { background: var(--surface-2); }
+    .experiment-item.selected { background: #142322; border-color: #347c74; }
+    .experiment-title { display: flex; align-items: start; gap: 8px; min-width: 0; }
+    .experiment-item .run-heading { display: block; min-width: 0; }
+    .experiment-item .run-heading h3 { margin: 0; color: var(--text); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+    .experiment-item .run-purpose { margin: 4px 0 0; color: #aebbb8; font-size: 11px; line-height: 1.45; text-align: left; }
+    .experiment-item .run-meta { margin-top: 3px; color: #687774; font-size: 10px; line-height: 1.45; text-align: left; }
+    .status-mark { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--muted); }
+    .status-mark.running, .status-mark.recent { background: var(--green); }
+    .status-mark.finalizing { background: var(--amber); }
+    .status-mark.stalled { background: var(--red); }
+    .status-mark.completed { background: var(--cyan); }
+    .experiment-sub { display: flex; justify-content: space-between; gap: 10px; margin-top: 7px; color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .experiment-path { margin-top: 6px; color: #687774; font-size: 10px; overflow-wrap: anywhere; }
+    .main { min-width: 0; }
+    .toolbar {
+      display: flex;
+      align-items: end;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(13, 18, 20, .94);
+      overflow-x: auto;
+    }
+    .field { min-width: 160px; }
+    .field label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+    .field select { width: 100%; padding: 6px 28px 6px 9px; }
+    .segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 4px; overflow: hidden; }
+    .segmented button { min-height: 34px; border: 0; border-right: 1px solid var(--line-strong); border-radius: 0; background: transparent; color: var(--muted); }
+    .segmented button:last-child { border-right: 0; }
+    .segmented button.active { color: var(--bg); background: var(--cyan); }
+    .chart-wrap { position: relative; height: 440px; min-height: 320px; border-bottom: 1px solid var(--line); background: rgba(9, 13, 15, .75); }
+    #chart { width: 100%; height: 100%; display: block; cursor: crosshair; }
+    .chart-empty { position: absolute; inset: 0; display: none; place-items: center; color: var(--muted); pointer-events: none; }
+    .tooltip { position: absolute; display: none; min-width: 145px; padding: 8px 10px; background: #11191c; border: 1px solid var(--line-strong); pointer-events: none; font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .metric-summary { display: grid; grid-template-columns: repeat(5, minmax(90px, 1fr)); background: rgba(13, 18, 20, .94); }
+    .metric-cell { padding: 13px 15px; border-right: 1px solid var(--line); }
+    .metric-cell:last-child { border-right: 0; }
+    .metric-cell strong { display: block; margin-top: 4px; color: #fff; font: 600 16px ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+    .run-overview { border-top: 1px solid var(--line); background: rgba(13, 18, 20, .94); }
+    .run-overview-body { padding: 18px 16px 22px; }
+    .run-heading { display: flex; justify-content: space-between; gap: 18px; align-items: start; }
+    .run-heading h3 { margin: 0; color: #fff; font-size: 17px; line-height: 1.35; }
+    .run-meta { color: var(--muted); font: 10px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; text-align: right; overflow-wrap: anywhere; }
+    .run-purpose { max-width: 900px; margin: 9px 0 0; color: #c6d0ce; font-size: 13px; line-height: 1.65; }
+    .run-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 22px; margin-top: 17px; border-top: 1px solid var(--line); }
+    .run-detail { min-width: 0; padding: 13px 0; }
+    .run-detail h4 { margin: 0 0 7px; color: var(--muted); font-size: 10px; text-transform: uppercase; }
+    .run-detail p, .run-detail ul { margin: 0; color: var(--text); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+    .run-detail ul { padding-left: 17px; }
+    .config-details { border-top: 1px solid var(--line); }
+    .config-details summary { padding: 12px 0; color: var(--text); cursor: pointer; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+    .config-row { min-width: 0; padding: 9px 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .config-row span { display: block; color: var(--muted); font-size: 10px; }
+    .config-row strong { display: block; margin-top: 4px; color: #fff; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+    .manifest-empty { margin: 0; color: var(--muted); font-size: 12px; }
+    .panel { border-bottom: 1px solid var(--line); }
+    .panel-body { padding: 13px 16px; }
+    .health-row { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+    .health-row:last-child { margin-bottom: 0; }
+    .health-row span:first-child { color: var(--muted); }
+    .health-row strong { text-align: right; overflow-wrap: anywhere; }
+    .state-text.running, .state-text.recent { color: var(--green); }
+    .state-text.finalizing { color: var(--amber); }
+    .state-text.completed { color: var(--cyan); }
+    .state-text.stalled { color: var(--red); }
+    .gpu-list, .checkpoint-list { display: grid; gap: 9px; }
+    .gpu-row { padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+    .gpu-row:last-child { padding-bottom: 0; border-bottom: 0; }
+    .gpu-top { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .gpu-state { color: var(--muted); }
+    .gpu-state.active { color: var(--green); }
+    .gpu-state.allocated { color: var(--amber); }
+    .gpu-metrics { display: grid; gap: 6px; }
+    .gpu-metric { display: grid; grid-template-columns: 42px minmax(0, 1fr) 106px; gap: 8px; align-items: center; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .gpu-metric span:last-child { text-align: right; color: var(--text); white-space: nowrap; }
+    .bar { height: 5px; background: #263034; overflow: hidden; }
+    .bar > span { display: block; height: 100%; background: var(--cyan); }
+    .bar.memory > span { background: var(--blue); }
+    .checkpoint { display: flex; justify-content: space-between; gap: 10px; padding-bottom: 7px; border-bottom: 1px solid var(--line); }
+    .checkpoint:last-child { border-bottom: 0; padding-bottom: 0; }
+    .checkpoint span:last-child { color: var(--muted); font-size: 11px; }
+    .checkpoint.selected strong { color: var(--cyan); }
+    .upload-controls { display: grid; gap: 9px; padding-top: 11px; border-top: 1px solid var(--line); }
+    .upload-controls label { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    .upload-controls select { width: 100%; padding: 7px 9px; }
+    .upload-controls button { width: 100%; color: #061311; background: var(--cyan); border-color: var(--cyan); font-weight: 700; }
+    .upload-controls button:hover, .upload-controls button:focus-visible { color: #061311; background: #65e8dc; border-color: #65e8dc; }
+    .upload-destination, .upload-status { color: var(--muted); font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+    .upload-status.success { color: var(--green); }
+    .upload-status.error { color: var(--red); }
+    .hub-list { display: grid; gap: 9px; }
+    .hub-entry { display: grid; gap: 3px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+    .hub-entry:last-child { padding-bottom: 0; border-bottom: 0; }
+    .hub-entry-label { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .hub-entry-row { display: grid; grid-template-columns: minmax(0, 1fr) 50px; gap: 8px; align-items: start; }
+    .hub-entry a { min-width: 0; padding-top: 4px; overflow-wrap: anywhere; font-size: 11px; }
+    .hub-copy { width: 50px; height: 28px; padding: 0; color: var(--muted); font-size: 10px; }
+    .hub-copy.copied { color: var(--green); border-color: var(--green); }
+    .hub-copy.failed { color: var(--red); border-color: var(--red); }
+    .log-panel { grid-column: 1 / -1; border-top: 1px solid var(--line-strong); background: #080b0d; }
+    .log-output { margin: 0; padding: 12px 16px 20px; max-height: 250px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #aebbb8; font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .error-banner { display: none; padding: 10px 18px; background: #341819; border-bottom: 1px solid var(--red); color: #ffc0c0; }
+    .empty { color: var(--muted); font-size: 12px; }
+    @media (max-width: 1180px) {
+      .workspace { grid-template-columns: 250px minmax(430px, 1fr); }
+      .inspector { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); border-left: 0; border-top: 1px solid var(--line); }
+      .inspector .panel { border-right: 1px solid var(--line); }
+    }
+    @media (max-width: 760px) {
+      .topbar { position: static; flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; }
+      .brand { min-width: 0; flex: 1; }
+      .server-meta { order: 3; flex-basis: 100%; }
+      .stats { position: static; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .stat { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+      .stat:nth-child(5) { grid-column: 1 / -1; }
+      .value { font-size: 17px; }
+      .workspace { display: block; }
+      .experiments { display: block; min-height: 0; contain: none; border-right: 0; border-bottom: 1px solid var(--line); }
+      .experiment-list { display: block; overflow: visible; }
+      .group-toggle, .subgroup-toggle { position: static; width: 100%; margin: 0; padding: 10px 8px; }
+      .group-items, .subgroup-items { display: grid; }
+      .group-items { display: flex; gap: 6px; padding: 0 0 8px; overflow-x: auto; }
+      .group-items[hidden] { display: none; }
+      .experiment-item { min-width: 250px; }
+      .toolbar { align-items: stretch; }
+      .field { min-width: 190px; }
+      .chart-wrap { height: 360px; }
+      .metric-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric-cell { border-bottom: 1px solid var(--line); }
+      .run-heading { display: block; }
+      .run-meta { margin-top: 7px; text-align: left; }
+      .run-detail-grid, .config-grid { grid-template-columns: 1fr; }
+      .inspector { display: block; }
+      .inspector .panel { border-right: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><strong>OneRec Training Monitor</strong><span>LOCALHOST / MANUAL CHECKPOINT ARCHIVE / BUILD 20260804.6</span></div>
+      <nav class="workspace-tabs" aria-label="工作台切换"><a class="workspace-tab" href="/">评测日志</a><a class="workspace-tab active" href="/train/">训练监控</a></nav>
+      <div class="server-meta" id="serverMeta">等待服务器快照</div>
+      <div class="connection"><span class="dot" id="connectionDot"></span><span id="connectionText">连接中</span></div>
+      <button id="refreshButton" type="button">立即刷新</button>
+    </header>
+    <div class="error-banner" id="errorBanner"></div>
+    <section class="stats" aria-label="训练概览">
+      <div class="stat"><div class="label">实验</div><div class="value" id="statExperiments">--</div></div>
+      <div class="stat"><div class="label">当前阶段</div><div class="value" id="statStatus">--</div></div>
+      <div class="stat"><div class="label">训练进度</div><div class="value" id="statProgress">--</div></div>
+      <div class="stat"><div class="label">最新 Loss</div><div class="value" id="statLoss">--</div></div>
+      <div class="stat"><div class="label">GPU 平均 SM / 显存</div><div class="value" id="statGpu">--</div></div>
+    </section>
+    <div class="workspace">
+      <aside class="experiments">
+        <div class="section-head">
+          <div class="section-title"><h2>实验目录</h2><span id="experimentCount">0 RUNS</span></div>
+          <input class="search" id="searchInput" type="search" placeholder="搜索实验或路径" aria-label="搜索实验">
+        </div>
+        <div class="experiment-list" id="experimentList"></div>
+      </aside>
+      <main class="main">
+        <div class="toolbar">
+          <div class="field"><label for="metricSelect">指标</label><select id="metricSelect"></select></div>
+          <div class="field"><label for="compareSelect">对比实验</label><select id="compareSelect"><option value="">不对比</option></select></div>
+          <div><div class="label" style="margin-bottom:5px">平滑</div><div class="segmented" id="smoothControl"><button type="button" data-window="1" class="active">原始</button><button type="button" data-window="10">MA 10</button><button type="button" data-window="50">MA 50</button></div></div>
+          <button id="resetZoom" type="button">复位视图</button>
+        </div>
+        <div class="chart-wrap" id="chartWrap">
+          <canvas id="chart"></canvas>
+          <div class="chart-empty" id="chartEmpty">当前指标没有可绘制数据</div>
+          <div class="tooltip" id="tooltip"></div>
+        </div>
+        <div class="metric-summary">
+          <div class="metric-cell"><div class="label">当前</div><strong id="metricCurrent">--</strong></div>
+          <div class="metric-cell"><div class="label">首值</div><strong id="metricFirst">--</strong></div>
+          <div class="metric-cell"><div class="label">最低</div><strong id="metricMin">--</strong></div>
+          <div class="metric-cell"><div class="label">最高</div><strong id="metricMax">--</strong></div>
+          <div class="metric-cell"><div class="label">变化</div><strong id="metricDelta">--</strong></div>
+        </div>
+        <section class="run-overview">
+          <div class="section-head"><div class="section-title"><h2>实验说明</h2><span>RUN MANIFEST</span></div></div>
+          <div class="run-overview-body" id="runOverview"></div>
+        </section>
+      </main>
+      <aside class="inspector">
+        <section class="panel">
+          <div class="section-head"><div class="section-title"><h2>运行健康</h2><span>PROCESS + LOG</span></div></div>
+          <div class="panel-body" id="healthPanel"></div>
+        </section>
+        <section class="panel">
+          <div class="section-head"><div class="section-title"><h2>GPU 节点</h2><span id="gpuCount">0 GPU</span></div></div>
+          <div class="panel-body gpu-list" id="gpuList"></div>
+        </section>
+        <section class="panel">
+          <div class="section-head"><div class="section-title"><h2>Checkpoint</h2><span id="checkpointCount">0 SAVES</span></div></div>
+          <div class="panel-body checkpoint-list">
+            <div id="checkpointList"></div>
+            <div class="upload-controls" id="uploadControls">
+              <label for="checkpointSelect">上传至 Hugging Face</label>
+              <select id="checkpointSelect" aria-label="选择要上传的 checkpoint"></select>
+              <div class="upload-destination" id="uploadDestination">未选择 checkpoint</div>
+              <button id="uploadButton" type="button">上传选中 Checkpoint</button>
+              <div class="upload-status" id="uploadStatus" aria-live="polite"></div>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="section-head"><div class="section-title"><h2>Hugging Face</h2><span id="hubCount">PRIVATE REPO</span></div></div>
+          <div class="panel-body" id="hubPanel"></div>
+        </section>
+      </aside>
+      <section class="log-panel">
+        <div class="section-head"><div class="section-title"><h2>最近日志</h2><span id="logPath">NO LOG</span></div></div>
+        <pre class="log-output" id="logOutput">等待日志数据</pre>
+      </section>
+    </div>
+  </div>
+  <script>
+    'use strict';
+    const state = { snapshot: null, selectedId: null, compareId: '', selectedCheckpoint: '', metric: 'loss', smooth: 1, view: null, dragStart: null, hoverX: null, timer: null, uploadInFlight: false, uploadResult: null, openGroups: new Set(), openSubgroups: new Set(), groupsInitialized: false };
+    const colors = ['#35d7c8', '#efbd5b'];
+    const statusLabels = { running: '训练中', recent: '最近活跃', finalizing: '评估 / 保存', stalled: '疑似停滞', completed: '已完成', inactive: '未活动' };
+    const el = id => document.getElementById(id);
+    function apiPath(name) {
+      let base = window.location.pathname;
+      if (base.endsWith('.html')) base = base.slice(0, base.lastIndexOf('/') + 1);
+      else if (!base.endsWith('/')) base += '/';
+      return `${base || '/'}api/${name}`;
+    }
+
+    function setText(id, value) { el(id).textContent = value == null || value === '' ? '--' : String(value); }
+    function formatNumber(value, digits = 4) {
+      if (!Number.isFinite(Number(value))) return '--';
+      const number = Number(value);
+      if (number !== 0 && (Math.abs(number) < 0.001 || Math.abs(number) >= 100000)) return number.toExponential(3);
+      return number.toLocaleString('zh-CN', { maximumFractionDigits: digits });
+    }
+    function formatBytes(value) {
+      if (!Number.isFinite(Number(value))) return '--';
+      const units = ['B', 'KB', 'MB', 'GB']; let size = Number(value); let unit = 0;
+      while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+      return `${formatNumber(size, 1)} ${units[unit]}`;
+    }
+    function formatAge(seconds) {
+      if (!Number.isFinite(Number(seconds))) return '未知';
+      if (seconds < 60) return `${Math.round(seconds)} 秒前`;
+      if (seconds < 3600) return `${Math.round(seconds / 60)} 分钟前`;
+      return `${formatNumber(seconds / 3600, 1)} 小时前`;
+    }
+    function selectedExperiment() { return state.snapshot?.experiments.find(item => item.id === state.selectedId) || null; }
+    function compareExperiment() { return state.snapshot?.experiments.find(item => item.id === state.compareId) || null; }
+    function evaluationRepo(current, checkpoint) {
+      return `${current.hub_owner}/${current.hub_repo_prefix}-${current.run_id}-step-${String(checkpoint.step).padStart(5, '0')}`;
+    }
+
+    async function refresh() {
+      el('refreshButton').disabled = true;
+      try {
+        const response = await fetch(apiPath('snapshot'), { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        state.snapshot = await response.json();
+        if (!state.snapshot.experiments.some(item => item.id === state.selectedId)) state.selectedId = state.snapshot.experiments[0]?.id || null;
+        if (!state.groupsInitialized) {
+          const selected = selectedExperiment();
+          if (selected?.group?.id) state.openGroups.add(selected.group.id);
+          if (selected?.group?.id && selected?.subgroup?.id) state.openSubgroups.add(`${selected.group.id}/${selected.subgroup.id}`);
+          state.groupsInitialized = true;
+        }
+        render();
+        el('connectionDot').className = 'dot online';
+        setText('connectionText', `已连接 · ${new Date(state.snapshot.generated_at * 1000).toLocaleTimeString('zh-CN')}`);
+        el('errorBanner').style.display = 'none';
+        clearTimeout(state.timer);
+        state.timer = setTimeout(refresh, state.snapshot.refresh_seconds * 1000);
+      } catch (error) {
+        el('connectionDot').className = 'dot offline';
+        setText('connectionText', '连接失败');
+        setText('errorBanner', `无法读取监控快照：${error.message}`);
+        el('errorBanner').style.display = 'block';
+        clearTimeout(state.timer); state.timer = setTimeout(refresh, 15000);
+      } finally { el('refreshButton').disabled = false; }
+    }
+
+    function render() {
+      const snapshot = state.snapshot;
+      const current = selectedExperiment();
+      setText('serverMeta', `${snapshot.server.hostname} · ${snapshot.server.outputs_roots.join(', ')}`);
+      setText('statExperiments', snapshot.experiments.length);
+      setText('statStatus', current ? statusLabels[current.status] || current.status : '--');
+      setText('statProgress', current?.latest?.percentage != null ? `${formatNumber(current.latest.percentage, 2)}%` : '--');
+      setText('statLoss', formatNumber(current?.summaries?.loss?.last));
+      setText('statGpu', snapshot.gpu.available ? `${Math.round(snapshot.gpu.average_utilization)}% / ${formatNumber(snapshot.gpu.average_memory_percent, 1)}%` : '--');
+      renderExperiments(); renderMetricControls(); renderInspector(); renderSummary(); renderRunOverview(); drawChart();
+    }
+
+    function renderExperiments() {
+      const list = el('experimentList'); list.replaceChildren();
+      const query = el('searchInput').value.trim().toLowerCase();
+      const items = state.snapshot.experiments.filter(item => {
+        const manifest = item.run_manifest || {};
+        return `${item.label} ${item.output_dir} ${manifest.title || ''} ${manifest.purpose || ''} ${manifest.run_id || ''}`.toLowerCase().includes(query);
+      });
+      setText('experimentCount', `${items.length} RUNS`);
+      if (!items.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '没有匹配的实验'; list.append(empty); return; }
+      const groups = new Map();
+      items.forEach(item => {
+        const group = item.group || { id: 'other', label: 'Other' };
+        if (!groups.has(group.id)) groups.set(group.id, { group, items: [] });
+        groups.get(group.id).items.push(item);
+      });
+      const appendExperiment = (container, item, groupId, subgroupId = '') => {
+        const button = document.createElement('button'); button.type = 'button'; button.className = `experiment-item${item.id === state.selectedId ? ' selected' : ''}`;
+        const manifest = item.run_manifest || {};
+        const title = document.createElement('div'); title.className = 'experiment-title';
+        const mark = document.createElement('span'); mark.className = `status-mark ${item.status}`;
+        const heading = document.createElement('div'); heading.className = 'run-heading';
+        const headingTitle = document.createElement('h3'); headingTitle.textContent = manifest.title || item.label;
+        if (manifest.purpose) {
+          const purpose = document.createElement('p'); purpose.className = 'run-purpose'; purpose.textContent = manifest.purpose;
+          heading.append(headingTitle, purpose);
+        } else {
+          const meta = document.createElement('div'); meta.className = 'run-meta';
+          meta.textContent = [manifest.run_id || item.label, manifest.model?.training_method, manifest.created_at].filter(Boolean).join(' · ');
+          heading.append(headingTitle, meta);
+        }
+        title.append(mark, heading);
+        const sub = document.createElement('div'); sub.className = 'experiment-sub';
+        const step = document.createElement('span'); step.textContent = `${item.latest.current_steps ?? '--'} / ${item.latest.total_steps ?? '--'}`;
+        const age = document.createElement('span'); age.textContent = formatAge(item.age_seconds);
+        sub.append(step, age);
+        button.append(title, sub);
+        button.addEventListener('click', () => {
+          state.selectedId = item.id;
+          state.openGroups.add(groupId);
+          if (subgroupId) state.openSubgroups.add(`${groupId}/${subgroupId}`);
+          state.compareId = ''; state.selectedCheckpoint = ''; state.uploadResult = null; state.view = null; render();
+        });
+        container.append(button);
+      };
+      groups.forEach(({ group, items: groupItems }) => {
+        const section = document.createElement('section'); section.className = 'experiment-group';
+        const expanded = Boolean(query) || state.openGroups.has(group.id);
+        const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'group-toggle';
+        toggle.setAttribute('aria-expanded', String(expanded));
+        const chevron = document.createElement('span'); chevron.className = 'group-chevron'; chevron.setAttribute('aria-hidden', 'true');
+        const name = document.createElement('span'); name.className = 'group-name'; name.textContent = group.label;
+        const count = document.createElement('span'); count.className = 'group-count'; count.textContent = `${groupItems.length} RUNS`;
+        toggle.append(chevron, name, count);
+        const contents = document.createElement('div'); contents.className = 'group-items'; contents.hidden = !expanded;
+        toggle.addEventListener('click', () => {
+          if (state.openGroups.has(group.id)) state.openGroups.delete(group.id); else state.openGroups.add(group.id);
+          renderExperiments();
+        });
+        const ungrouped = groupItems.filter(item => !item.subgroup?.id);
+        ungrouped.forEach(item => appendExperiment(contents, item, group.id));
+        const subgroups = new Map();
+        groupItems.filter(item => item.subgroup?.id).forEach(item => {
+          if (!subgroups.has(item.subgroup.id)) subgroups.set(item.subgroup.id, { subgroup: item.subgroup, items: [] });
+          subgroups.get(item.subgroup.id).items.push(item);
+        });
+        (state.snapshot.subgroups || []).filter(item => item.group_id === group.id).forEach(subgroup => {
+          if (!subgroups.has(subgroup.id)) subgroups.set(subgroup.id, { subgroup, items: [] });
+        });
+        [...subgroups.values()].sort((left, right) => left.subgroup.label.localeCompare(right.subgroup.label)).forEach(({ subgroup, items: subgroupItems }) => {
+          const subgroupKey = `${group.id}/${subgroup.id}`;
+          const subgroupSection = document.createElement('section'); subgroupSection.className = 'experiment-subgroup';
+          const subgroupExpanded = Boolean(query) || state.openSubgroups.has(subgroupKey);
+          const subgroupToggle = document.createElement('button'); subgroupToggle.type = 'button'; subgroupToggle.className = 'subgroup-toggle';
+          subgroupToggle.setAttribute('aria-expanded', String(subgroupExpanded));
+          const subgroupChevron = document.createElement('span'); subgroupChevron.className = 'subgroup-chevron'; subgroupChevron.setAttribute('aria-hidden', 'true');
+          const subgroupName = document.createElement('span'); subgroupName.className = 'subgroup-name'; subgroupName.textContent = subgroup.label;
+          const subgroupCount = document.createElement('span'); subgroupCount.className = 'subgroup-count'; subgroupCount.textContent = `${subgroupItems.length} RUNS`;
+          subgroupToggle.append(subgroupChevron, subgroupName, subgroupCount);
+          const subgroupContents = document.createElement('div'); subgroupContents.className = 'subgroup-items'; subgroupContents.hidden = !subgroupExpanded;
+          subgroupToggle.addEventListener('click', () => {
+            if (state.openSubgroups.has(subgroupKey)) state.openSubgroups.delete(subgroupKey); else state.openSubgroups.add(subgroupKey);
+            renderExperiments();
+          });
+          if (subgroupItems.length) subgroupItems.forEach(item => appendExperiment(subgroupContents, item, group.id, subgroup.id));
+          else { const empty = document.createElement('div'); empty.className = 'subgroup-empty'; empty.textContent = '暂无训练运行'; subgroupContents.append(empty); }
+          subgroupSection.append(subgroupToggle, subgroupContents); contents.append(subgroupSection);
+        });
+        section.append(toggle, contents); list.append(section);
+      });
+    }
+
+    function renderMetricControls() {
+      const current = selectedExperiment(); const metricSelect = el('metricSelect'); const previous = state.metric;
+      metricSelect.replaceChildren();
+      (current?.metrics || []).forEach(metric => { const option = document.createElement('option'); option.value = metric; option.textContent = metric; metricSelect.append(option); });
+      if (current?.metrics.includes(previous)) state.metric = previous; else state.metric = current?.metrics.includes('loss') ? 'loss' : current?.metrics[0] || '';
+      metricSelect.value = state.metric;
+      const compare = el('compareSelect'); compare.replaceChildren();
+      const none = document.createElement('option'); none.value = ''; none.textContent = '不对比'; compare.append(none);
+      state.snapshot.experiments.filter(item => item.id !== state.selectedId && item.metrics.includes(state.metric)).forEach(item => {
+        const option = document.createElement('option'); option.value = item.id; option.textContent = item.label; compare.append(option);
+      });
+      if (![...compare.options].some(option => option.value === state.compareId)) state.compareId = '';
+      compare.value = state.compareId;
+    }
+
+    function addHealthRow(parent, label, value, className = '') {
+      const row = document.createElement('div'); row.className = 'health-row';
+      const name = document.createElement('span'); name.textContent = label;
+      const result = document.createElement('strong'); result.textContent = value; if (className) result.className = className;
+      row.append(name, result); parent.append(row);
+    }
+
+    function renderInspector() {
+      const current = selectedExperiment(); const health = el('healthPanel'); health.replaceChildren();
+      if (current) {
+        addHealthRow(health, '状态', statusLabels[current.status] || current.status, `state-text ${current.status}`);
+        addHealthRow(health, '根进程', current.pid ? `${current.pid} · ${current.process_alive ? '存活' : '已退出'}` : '未配置');
+        addHealthRow(health, '日志更新', formatAge(current.age_seconds));
+        addHealthRow(health, '记录数', `${current.record_count} 条`);
+        addHealthRow(health, '损坏行', String(current.malformed_lines));
+      } else { health.textContent = '没有实验'; health.className = 'panel-body empty'; }
+
+      const gpuList = el('gpuList'); gpuList.replaceChildren(); const gpus = state.snapshot.gpu.gpus || [];
+      setText('gpuCount', `${gpus.length} GPU`);
+      gpus.forEach(gpu => {
+        const row = document.createElement('div'); row.className = 'gpu-row';
+        const top = document.createElement('div'); top.className = 'gpu-top';
+        const left = document.createElement('strong'); left.textContent = `GPU ${gpu.index}`;
+        const active = gpu.utilization >= 5;
+        const allocated = !active && gpu.memory_used >= 512;
+        const stateLabel = document.createElement('span'); stateLabel.className = `gpu-state ${active ? 'active' : allocated ? 'allocated' : ''}`;
+        stateLabel.textContent = active ? '计算中' : allocated ? '已占用 / 当前空闲' : '空闲';
+        top.append(left, stateLabel);
+
+        const metrics = document.createElement('div'); metrics.className = 'gpu-metrics';
+        const smMetric = document.createElement('div'); smMetric.className = 'gpu-metric';
+        const smLabel = document.createElement('span'); smLabel.textContent = 'SM';
+        const smBar = document.createElement('div'); smBar.className = 'bar'; const smFill = document.createElement('span'); smFill.style.width = `${Math.max(0, Math.min(100, gpu.utilization))}%`; smBar.append(smFill);
+        const smValue = document.createElement('span'); smValue.textContent = `${Math.round(gpu.utilization)}% · ${gpu.temperature}°C · ${formatNumber(gpu.power_draw, 0)}W`;
+        smMetric.append(smLabel, smBar, smValue);
+
+        const memoryMetric = document.createElement('div'); memoryMetric.className = 'gpu-metric';
+        const memoryLabel = document.createElement('span'); memoryLabel.textContent = 'VRAM';
+        const memoryBar = document.createElement('div'); memoryBar.className = 'bar memory'; const memoryFill = document.createElement('span'); memoryFill.style.width = `${Math.max(0, Math.min(100, gpu.memory_percent))}%`; memoryBar.append(memoryFill);
+        const memoryValue = document.createElement('span'); memoryValue.textContent = `${formatNumber(gpu.memory_percent, 1)}% · ${formatNumber(gpu.memory_used / 1024, 1)}/${formatNumber(gpu.memory_total / 1024, 0)} GB`;
+        memoryMetric.append(memoryLabel, memoryBar, memoryValue);
+
+        metrics.append(smMetric, memoryMetric); row.append(top, metrics); gpuList.append(row);
+      });
+      if (!gpus.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = state.snapshot.gpu.error || 'GPU 数据不可用'; gpuList.append(empty); }
+
+      const checkpoints = current?.checkpoints || []; const checkpointList = el('checkpointList'); checkpointList.replaceChildren();
+      const uploads = current?.uploads || {};
+      setText('checkpointCount', `${checkpoints.length} SAVES`);
+      if (!checkpoints.some(item => item.name === state.selectedCheckpoint)) state.selectedCheckpoint = checkpoints.at(-1)?.name || '';
+      checkpoints.forEach(item => {
+        const uploaded = uploads[item.name]; const row = document.createElement('div'); row.className = `checkpoint${item.name === state.selectedCheckpoint ? ' selected' : ''}`;
+        const name = document.createElement('strong'); name.textContent = item.name;
+        const status = document.createElement('span');
+        if (uploaded?.repo_url) { const link = document.createElement('a'); link.href = uploaded.repo_url; link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = '已上传'; status.append(link); }
+        else status.textContent = formatBytes(item.adapter_bytes);
+        row.append(name, status); checkpointList.append(row);
+      });
+      if (!checkpoints.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无 checkpoint'; checkpointList.append(empty); }
+
+      const select = el('checkpointSelect'); select.replaceChildren();
+      checkpoints.forEach(item => { const option = document.createElement('option'); option.value = item.name; option.textContent = uploads[item.name] ? `${item.name} · 已上传` : `${item.name} · ${formatBytes(item.adapter_bytes)}`; select.append(option); });
+      select.value = state.selectedCheckpoint;
+      select.disabled = !checkpoints.length || !current?.upload_enabled || state.uploadInFlight;
+      const selectedCheckpoint = checkpoints.find(item => item.name === state.selectedCheckpoint);
+      const selectedUpload = selectedCheckpoint ? uploads[selectedCheckpoint.name] : null;
+      const repoId = selectedCheckpoint && current?.upload_enabled ? evaluationRepo(current, selectedCheckpoint) : '';
+      setText('uploadDestination', selectedUpload?.repo_id ? `${selectedUpload.repo_id}  (已提交)` : repoId ? `${repoId}  (仓库根目录)` : current?.upload_enabled ? '未选择 checkpoint' : '此任务尚未配置上传');
+      const uploadButton = el('uploadButton'); uploadButton.disabled = !selectedCheckpoint || !current?.upload_enabled || state.uploadInFlight || Boolean(selectedUpload);
+      uploadButton.textContent = state.uploadInFlight ? '上传中...' : selectedUpload ? '此 Checkpoint 已上传' : '上传选中 Checkpoint';
+      renderUploadStatus();
+
+      const hub = el('hubPanel'); hub.replaceChildren();
+      const uploadedEntries = Object.entries(uploads).sort(([, left], [, right]) => Number(left.step || 0) - Number(right.step || 0));
+      if (uploadedEntries.length) {
+        hub.className = 'panel-body hub-list'; setText('hubCount', `${uploadedEntries.length} REPOS`);
+        uploadedEntries.forEach(([checkpointName, item]) => {
+          const entry = document.createElement('div'); entry.className = 'hub-entry';
+          const label = document.createElement('span'); label.className = 'hub-entry-label'; label.textContent = `${checkpointName} · 已提交`;
+          const repoUrl = item.repo_url || `https://huggingface.co/${item.repo_id}`;
+          const row = document.createElement('div'); row.className = 'hub-entry-row';
+          const link = document.createElement('a'); link.href = repoUrl; link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = item.repo_id;
+          const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'hub-copy'; copy.textContent = '复制';
+          copy.title = '复制 Hugging Face 仓库链接'; copy.setAttribute('aria-label', `复制 ${item.repo_id} 的链接`);
+          copy.addEventListener('click', () => copyRepositoryUrl(repoUrl, copy));
+          row.append(link, copy); entry.append(label, row); hub.append(entry);
+        });
+      } else if (current?.upload_enabled) {
+        hub.className = 'panel-body'; setText('hubCount', 'PRIVATE REPO');
+        const pattern = document.createElement('div'); pattern.className = 'upload-destination';
+        pattern.textContent = `${current.hub_owner}/${current.hub_repo_prefix}-${current.run_id}-step-xxxxx`;
+        hub.append(pattern);
+      } else { hub.textContent = '未配置 Hub 仓库'; hub.className = 'panel-body empty'; setText('hubCount', 'PRIVATE REPO'); }
+      setText('logPath', current?.log_path || 'NO LOG'); setText('logOutput', current?.log_tail?.join('\n') || '暂无日志内容');
+    }
+
+    async function copyRepositoryUrl(value, button) {
+      let copied = false;
+      if (window.isSecureContext && navigator.clipboard?.writeText) {
+        try { await navigator.clipboard.writeText(value); copied = true; } catch { copied = false; }
+      }
+      if (!copied) {
+        const textarea = document.createElement('textarea'); textarea.value = value; textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed'; textarea.style.opacity = '0'; textarea.style.pointerEvents = 'none';
+        document.body.append(textarea); textarea.select();
+        try { copied = document.execCommand('copy'); } catch { copied = false; }
+        textarea.remove();
+      }
+      button.classList.remove('copied', 'failed'); button.classList.add(copied ? 'copied' : 'failed');
+      button.textContent = copied ? '已复制' : '失败';
+      window.setTimeout(() => {
+        if (!button.isConnected) return;
+        button.classList.remove('copied', 'failed'); button.textContent = '复制';
+      }, 1600);
+    }
+
+    function renderUploadStatus() {
+      const status = el('uploadStatus'); status.replaceChildren(); status.className = 'upload-status';
+      if (!state.uploadResult) return;
+      if (state.uploadResult.error) { status.classList.add('error'); status.textContent = state.uploadResult.error; return; }
+      status.classList.add('success');
+      status.append(document.createTextNode(`已上传 ${state.uploadResult.repo_id}`));
+      if (state.uploadResult.repo_url) { const link = document.createElement('a'); link.href = state.uploadResult.repo_url; link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = ' 打开仓库'; status.append(link); }
+      else if (state.uploadResult.commit_url) { const link = document.createElement('a'); link.href = state.uploadResult.commit_url; link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = ' 查看提交'; status.append(link); }
+      if (state.uploadResult.index_warning) status.append(document.createTextNode(` · ${state.uploadResult.index_warning}`));
+    }
+
+    async function uploadSelectedCheckpoint() {
+      const current = selectedExperiment();
+      if (!current?.upload_enabled || !state.selectedCheckpoint || state.uploadInFlight) return;
+      const checkpoint = current.checkpoints.find(item => item.name === state.selectedCheckpoint);
+      if (!checkpoint || current.uploads?.[checkpoint.name]) return;
+      state.uploadInFlight = true; state.uploadResult = null; renderInspector();
+      try {
+        let response = await fetch(apiPath('upload'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ experiment_id: current.id, checkpoint_name: checkpoint.name }),
+        });
+        if (response.status === 405) {
+          const nonce = state.snapshot?.upload_nonce;
+          if (!nonce) throw new Error('上传令牌已过期，请刷新页面后重试。');
+          const query = new URLSearchParams({ experiment_id: current.id, checkpoint_name: checkpoint.name, nonce });
+          response = await fetch(`${apiPath('upload')}?${query}`, { cache: 'no-store' });
+        }
+        const body = await response.text();
+        let result;
+        try { result = JSON.parse(body); }
+        catch { throw new Error(`服务返回了非 JSON 响应（HTTP ${response.status}）。请刷新页面后重试。`); }
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        state.uploadResult = result;
+      } catch (error) { state.uploadResult = { error: `上传失败：${error.message}` }; }
+      finally { state.uploadInFlight = false; await refresh(); }
+    }
+
+    function renderSummary() {
+      const summary = selectedExperiment()?.summaries?.[state.metric];
+      setText('metricCurrent', formatNumber(summary?.last)); setText('metricFirst', formatNumber(summary?.first));
+      setText('metricMin', formatNumber(summary?.min)); setText('metricMax', formatNumber(summary?.max)); setText('metricDelta', formatNumber(summary?.delta));
+    }
+
+    function appendRunDetail(parent, label, content, listItems = null) {
+      if (!content && !listItems?.length) return;
+      const block = document.createElement('section'); block.className = 'run-detail';
+      const heading = document.createElement('h4'); heading.textContent = label; block.append(heading);
+      if (listItems?.length) {
+        const list = document.createElement('ul');
+        listItems.forEach(item => { const row = document.createElement('li'); row.textContent = item; list.append(row); });
+        block.append(list);
+      } else {
+        const paragraph = document.createElement('p'); paragraph.textContent = content; block.append(paragraph);
+      }
+      parent.append(block);
+    }
+
+    function renderRunOverview() {
+      const panel = el('runOverview'); panel.replaceChildren();
+      const current = selectedExperiment(); const manifest = current?.run_manifest;
+      if (!current) { const empty = document.createElement('p'); empty.className = 'manifest-empty'; empty.textContent = '未选择实验'; panel.append(empty); return; }
+      if (!manifest?.available) {
+        const empty = document.createElement('p'); empty.className = 'manifest-empty';
+        empty.textContent = manifest?.error ? `运行说明无法读取：${manifest.error}` : '该实验尚未提供 run_manifest.json';
+        panel.append(empty); return;
+      }
+
+      const heading = document.createElement('div'); heading.className = 'run-heading';
+      const title = document.createElement('h3'); title.textContent = manifest.title || current.label;
+      const meta = document.createElement('div'); meta.className = 'run-meta';
+      meta.textContent = [manifest.run_id, manifest.model?.training_method, manifest.created_at].filter(Boolean).join(' · ');
+      heading.append(title, meta); panel.append(heading);
+      if (manifest.purpose) { const purpose = document.createElement('p'); purpose.className = 'run-purpose'; purpose.textContent = manifest.purpose; panel.append(purpose); }
+
+      const details = document.createElement('div'); details.className = 'run-detail-grid';
+      appendRunDetail(details, '本次改动', '', manifest.changes);
+      appendRunDetail(details, '实验假设', manifest.hypothesis);
+      appendRunDetail(details, '对比实验', manifest.comparison_run);
+      appendRunDetail(details, '数据', manifest.dataset?.summary);
+      appendRunDetail(details, '基座模型', manifest.model?.base_model);
+      appendRunDetail(details, '预期结果', manifest.expected_result);
+      appendRunDetail(details, '补充说明', manifest.notes);
+      if (details.children.length) panel.append(details);
+
+      if (manifest.config_summary?.length) {
+        const config = document.createElement('details'); config.className = 'config-details'; config.open = true;
+        const summary = document.createElement('summary');
+        const fileState = manifest.config_available ? manifest.config_file : `${manifest.config_file || 'training_config.yaml'} 缺失`;
+        summary.textContent = `关键配置 · ${manifest.config_summary.length} 项 · ${fileState}`; config.append(summary);
+        const grid = document.createElement('div'); grid.className = 'config-grid';
+        manifest.config_summary.forEach(item => {
+          const row = document.createElement('div'); row.className = 'config-row';
+          const label = document.createElement('span'); label.textContent = item.label;
+          const value = document.createElement('strong'); value.textContent = item.value;
+          row.append(label, value); grid.append(row);
+        });
+        config.append(grid); panel.append(config);
+      }
+    }
+
+    function movingAverage(points, windowSize) {
+      if (windowSize <= 1) return points;
+      let sum = 0; const queue = [];
+      return points.map(point => { queue.push(point[1]); sum += point[1]; if (queue.length > windowSize) sum -= queue.shift(); return [point[0], sum / queue.length]; });
+    }
+
+    function chartDatasets() {
+      const result = []; const current = selectedExperiment(); const comparison = compareExperiment();
+      if (current?.series?.[state.metric]) result.push({ label: current.label, points: movingAverage(current.series[state.metric], state.smooth), color: colors[0] });
+      if (comparison?.series?.[state.metric]) result.push({ label: comparison.label, points: movingAverage(comparison.series[state.metric], state.smooth), color: colors[1] });
+      return result;
+    }
+
+    function drawChart() {
+      const canvas = el('chart'); const wrap = el('chartWrap'); const rect = wrap.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(rect.width * dpr)); canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr); ctx.clearRect(0, 0, rect.width, rect.height);
+      const sets = chartDatasets(); const all = sets.flatMap(set => set.points);
+      el('chartEmpty').style.display = all.length ? 'none' : 'grid'; if (!all.length) return;
+      const margin = { left: 66, right: 24, top: 30, bottom: 44 }; const width = rect.width - margin.left - margin.right; const height = rect.height - margin.top - margin.bottom;
+      const fullMinX = Math.min(...all.map(point => point[0])); const fullMaxX = Math.max(...all.map(point => point[0]));
+      if (!state.view) state.view = { min: fullMinX, max: fullMaxX || fullMinX + 1 };
+      state.view.min = Math.max(fullMinX, state.view.min); state.view.max = Math.min(fullMaxX || fullMinX + 1, state.view.max);
+      if (state.view.max <= state.view.min) state.view.max = state.view.min + 1;
+      const visible = sets.flatMap(set => set.points.filter(point => point[0] >= state.view.min && point[0] <= state.view.max));
+      let minY = Math.min(...visible.map(point => point[1])); let maxY = Math.max(...visible.map(point => point[1])); const padding = (maxY - minY || Math.abs(maxY) * .1 || 1) * .12; minY -= padding; maxY += padding;
+      const xFor = value => margin.left + ((value - state.view.min) / (state.view.max - state.view.min)) * width;
+      const yFor = value => margin.top + (1 - (value - minY) / (maxY - minY)) * height;
+      ctx.font = '11px ui-monospace, SFMono-Regular, Consolas, monospace'; ctx.lineWidth = 1;
+      for (let index = 0; index <= 5; index += 1) {
+        const y = margin.top + height * index / 5; const value = maxY - (maxY - minY) * index / 5;
+        ctx.strokeStyle = '#273236'; ctx.beginPath(); ctx.moveTo(margin.left, y); ctx.lineTo(rect.width - margin.right, y); ctx.stroke();
+        ctx.fillStyle = '#80908d'; ctx.textAlign = 'right'; ctx.fillText(formatNumber(value, 3), margin.left - 9, y + 4);
+      }
+      for (let index = 0; index <= 5; index += 1) {
+        const x = margin.left + width * index / 5; const value = state.view.min + (state.view.max - state.view.min) * index / 5;
+        ctx.fillStyle = '#80908d'; ctx.textAlign = index === 0 ? 'left' : index === 5 ? 'right' : 'center'; ctx.fillText(formatNumber(value, 0), x, rect.height - 17);
+      }
+      sets.forEach((set, setIndex) => {
+        const points = set.points.filter(point => point[0] >= state.view.min && point[0] <= state.view.max); if (!points.length) return;
+        ctx.strokeStyle = set.color; ctx.lineWidth = 2; ctx.shadowColor = set.color; ctx.shadowBlur = 6; ctx.beginPath();
+        points.forEach((point, index) => { const x = xFor(point[0]); const y = yFor(point[1]); if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }); ctx.stroke(); ctx.shadowBlur = 0;
+        ctx.fillStyle = set.color; ctx.textAlign = 'left'; ctx.fillText(set.label, margin.left + setIndex * 210, 17);
+      });
+      if (state.hoverX != null && state.hoverX >= margin.left && state.hoverX <= rect.width - margin.right) {
+        ctx.strokeStyle = '#aab8b5'; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(state.hoverX, margin.top); ctx.lineTo(state.hoverX, margin.top + height); ctx.stroke(); ctx.setLineDash([]);
+      }
+      canvas._chart = { margin, width, height, minY, maxY, xFor, yFor, sets };
+    }
+
+    function showTooltip(event) {
+      const chart = el('chart'); const info = chart._chart; if (!info) return;
+      const rect = chart.getBoundingClientRect(); const x = event.clientX - rect.left; state.hoverX = x;
+      const step = state.view.min + ((x - info.margin.left) / info.width) * (state.view.max - state.view.min);
+      const lines = [`step ${Math.round(step)}`];
+      info.sets.forEach(set => { const point = set.points.reduce((best, current) => Math.abs(current[0] - step) < Math.abs(best[0] - step) ? current : best, set.points[0]); if (point) lines.push(`${set.label}: ${formatNumber(point[1])}`); });
+      const tip = el('tooltip'); tip.replaceChildren(); lines.forEach((line, index) => { const row = document.createElement('div'); row.textContent = line; if (index > 0) row.style.color = colors[index - 1]; tip.append(row); });
+      tip.style.display = 'block'; tip.style.left = `${Math.min(rect.width - 175, Math.max(8, x + 12))}px`; tip.style.top = `${Math.max(8, event.clientY - rect.top - 36)}px`; drawChart();
+    }
+
+    el('refreshButton').addEventListener('click', refresh);
+    el('checkpointSelect').addEventListener('change', event => { state.selectedCheckpoint = event.target.value; state.uploadResult = null; renderInspector(); });
+    el('uploadButton').addEventListener('click', uploadSelectedCheckpoint);
+    el('searchInput').addEventListener('input', renderExperiments);
+    el('metricSelect').addEventListener('change', event => { state.metric = event.target.value; state.compareId = ''; state.view = null; renderMetricControls(); renderSummary(); drawChart(); });
+    el('compareSelect').addEventListener('change', event => { state.compareId = event.target.value; state.view = null; drawChart(); });
+    el('smoothControl').addEventListener('click', event => { const button = event.target.closest('button[data-window]'); if (!button) return; state.smooth = Number(button.dataset.window); [...el('smoothControl').querySelectorAll('button')].forEach(item => item.classList.toggle('active', item === button)); drawChart(); });
+    el('resetZoom').addEventListener('click', () => { state.view = null; drawChart(); });
+    el('chart').addEventListener('mousemove', event => { if (state.dragStart) { const rect = el('chart').getBoundingClientRect(); const delta = (event.clientX - state.dragStart.x) / rect.width * (state.dragStart.view.max - state.dragStart.view.min); state.view = { min: state.dragStart.view.min - delta, max: state.dragStart.view.max - delta }; drawChart(); } else showTooltip(event); });
+    el('chart').addEventListener('mouseleave', () => { state.hoverX = null; state.dragStart = null; el('tooltip').style.display = 'none'; drawChart(); });
+    el('chart').addEventListener('mousedown', event => { state.dragStart = { x: event.clientX, view: { ...state.view } }; });
+    window.addEventListener('mouseup', () => { state.dragStart = null; });
+    el('chart').addEventListener('dblclick', () => { state.view = null; drawChart(); });
+    el('chart').addEventListener('wheel', event => { event.preventDefault(); if (!state.view) return; const rect = el('chart').getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); const range = state.view.max - state.view.min; const factor = event.deltaY > 0 ? 1.25 : .8; const next = range * factor; const center = state.view.min + range * ratio; state.view = { min: center - next * ratio, max: center + next * (1 - ratio) }; drawChart(); }, { passive: false });
+    window.addEventListener('resize', drawChart);
+    refresh();
+  </script>
+</body>
+</html>
