@@ -26,5 +26,9 @@ jobs:
           python -m py_compile
           scripts/streamlake_experiments.py
           scripts/eval_monitor.py
+          scripts/experiment_manifest.py
+          scripts/release_check.py
           assets/eval-monitor/monitor_server.py
           assets/eval-monitor/eval_log_parser.py
+      - name: Check portable sanitized checkout
+        run: python scripts/release_check.py
