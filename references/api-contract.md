@@ -61,7 +61,7 @@ Dashboard metric definitions are collected recursively from `metrics` arrays. Th
 - Detail: `GET /api/customized/commercial/v1/competition-eval-task/{evalTaskId}`
 - Evaluation output: `GET /api/customized/commercial/v1/competition-eval-task/{evalTaskId}/output`
 
-When the task was created on or after `2026-08-01T00:00:00Z`, is `SUCCEEDED`, and has `hasOutput=true`, `download-log` may follow the returned HTTPS `safetyimg.com` `.log` URL. The complete log is downloaded without a file-size limit and without forwarding the StreamLake Cookie to the log host.
+When the task was created on or after `2026-08-01T00:00:00Z`, is `SUCCEEDED`, and has `hasOutput=true`, `download-log` may follow the returned HTTPS `.log` URL on the approved `safetyimg.com` or `yximgs.com` CDN families. The complete log is downloaded without a file-size limit and without forwarding the StreamLake Cookie to the log host.
 
 List-level values such as `r1`, `r2`, and `r3`, plus numeric score fields in detail/output payloads, are normalized as metrics. Full lightweight payloads remain in sanitized raw JSON.
 

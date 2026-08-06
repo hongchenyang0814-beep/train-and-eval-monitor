@@ -61,7 +61,7 @@
 - 详情：`GET /api/customized/commercial/v1/competition-eval-task/{evalTaskId}`
 - 评测输出：`GET /api/customized/commercial/v1/competition-eval-task/{evalTaskId}/output`
 
-当任务创建时间不早于 `2026-08-01T00:00:00Z`、状态为 `SUCCEEDED` 且 `hasOutput=true` 时，`download-log` 可以跟随该接口返回的 `safetyimg.com` HTTPS `.log` 地址下载完整日志。下载不设置文件大小上限，也不会向日志域名发送 StreamLake Cookie。
+当任务创建时间不早于 `2026-08-01T00:00:00Z`、状态为 `SUCCEEDED` 且 `hasOutput=true` 时，`download-log` 可以跟随该接口返回的 `safetyimg.com` 或 `yximgs.com` CDN HTTPS `.log` 地址下载完整日志。下载不设置文件大小上限，也不会向日志域名发送 StreamLake Cookie。
 
 列表级的 `r1`、`r2`、`r3` 等数值，以及详情/输出载荷中的数值评分字段，都会被标准化为指标。完整的轻量级载荷会保留在脱敏原始 JSON 中。
 

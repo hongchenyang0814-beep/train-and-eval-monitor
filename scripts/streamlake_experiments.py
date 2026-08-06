@@ -32,6 +32,7 @@ MAX_STORED_STRING_BYTES = 64 * 1024
 METRIC_QUERY_BATCH_SIZE = 16
 ALLOWED_STREAMLAKE_HOST = "console.streamlake.com"
 ALLOWED_EVALUATION_LOG_DOMAIN = "safetyimg.com"
+ALLOWED_EVALUATION_LOG_DOMAINS = ("safetyimg.com", "yximgs.com")
 READ_ONLY_POST_PATHS = {
     "/api/customized/commercial/v1/train-task/list",
     "/api/customized/commercial/v1/train-task/metric-query",
@@ -356,8 +357,8 @@ def validate_evaluation_log_url(value: str) -> urllib.parse.SplitResult:
     hostname = (parsed.hostname or "").lower()
     if parsed.scheme != "https":
         raise ValueError("Evaluation log URL must use HTTPS")
-    if hostname != ALLOWED_EVALUATION_LOG_DOMAIN and not hostname.endswith(f".{ALLOWED_EVALUATION_LOG_DOMAIN}"):
-        raise ValueError(f"Evaluation log URL must use {ALLOWED_EVALUATION_LOG_DOMAIN}")
+    if not any(hostname == domain or hostname.endswith(f".{domain}") for domain in ALLOWED_EVALUATION_LOG_DOMAINS):
+        raise ValueError("Evaluation log URL must use safetyimg.com or yximgs.com")
     if parsed.username or parsed.password or parsed.fragment:
         raise ValueError("Evaluation log URL contains unsupported credentials or fragment")
     if not urllib.parse.unquote(parsed.path).lower().endswith(".log"):
