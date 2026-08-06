@@ -182,7 +182,8 @@ class EvaluationLogDownloadTests(unittest.TestCase):
     def test_log_url_validation_rejects_non_https_and_unapproved_host(self):
         with self.assertRaisesRegex(ValueError, "HTTPS"):
             self.module.validate_evaluation_log_url("http://p2-pro.safetyimg.com/example.log")
-        with self.assertRaisesRegex(ValueError, "safetyimg.com"):
+        self.module.validate_evaluation_log_url("https://p4-infra-fdl.yximgs.com/example.log")
+        with self.assertRaisesRegex(ValueError, "safetyimg.com or yximgs.com"):
             self.module.validate_evaluation_log_url("https://attacker.invalid/example.log")
         with self.assertRaisesRegex(ValueError, "not a .log"):
             self.module.validate_evaluation_log_url("https://p2-pro.safetyimg.com/model.bin")
