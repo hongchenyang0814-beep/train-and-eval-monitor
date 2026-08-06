@@ -1,152 +1,188 @@
-# StreamLake 实验分析 Skill
+# Train and Eval Monitor
 
 [English](README.md)
 
-这是一个面向 Codex 的 Skill 和零第三方依赖 Python CLI，用于把 StreamLake 万擎平台上的微调与比赛评估实验同步到本地，并自动对比指标和训练参数。它内置可通过 SSH 访问的评测日志 Monitor，可通过受控命令下载和分析完整评测日志，但不会下载 checkpoint、模型权重、数据集或预测文件。
+Train and Eval Monitor 是一个面向 Codex 的 Skill 和零第三方依赖 Python 工具，统一处理两类工作：
 
-> 告别手动翻实验、抄指标。StreamLake Experiment Analyst 可以一键同步万擎训练与评估记录，在本地自动整理指标、参数与实验关联，并生成适合 Codex 等 Vibe Coding 工具直接分析的上下文。只拉取轻量实验元数据，不下载模型权重、checkpoint、数据集或预测文件。
+- 同步 StreamLake / 万擎平台的微调与正式评测记录；
+- 在同一个可通过 SSH 访问的网页中查看本地 LLaMA-Factory 训练监控和评测日志分析。
 
-## 功能
+它会在受控流程允许时下载完整评测日志，但不会下载模型权重、checkpoint、数据集或预测文件。
 
-- 全量分页同步训练与评估实验，并按实验 ID 去重。
-- 强制只同步创建时间在 `2026-08-01T00:00:00Z`（含）之后的实验；`sync --since ISO-8601时间戳` 只能进一步缩小范围，不能请求更早记录。
-- 对平台明确标记为 `FAILED` 且 `hasOutput=false` 的评测任务，在请求详情和结果前自动过滤。
-- 可按精确评测 ID 下载完整日志，不限制日志文件大小，且不会把 StreamLake Cookie 转发给日志 CDN。
-- 每次普通 `sync` 都会自动补齐所有已成功评测的完整日志；默认保存到 `<output-dir>/logs/<evalTaskId>/evaluation.log`，已有完整文件会复用并重新计算哈希。
-- 正在运行或排队的评测会保留元数据，但在 `hasOutput=true` 前不会请求日志；后续同步会在评测成功后自动补下。
-- 保存 SQLite、脱敏 JSON、CSV、实验目录和 LLM 上下文。
-- 比较指标差值、缺失指标和训练参数差异。
-- 脱敏 Cookie/JWT/签名 URL，排除二进制与大文本内容。
-- 只允许 StreamLake 官方域名上的只读查询端点。
-- 一条命令部署统一 Monitor：`/` 是评测日志分析页，`/train/` 是本地 LLaMA-Factory 训练监控页。
-- 训练页读取本地 `trainer_log.jsonl`、GPU 状态、checkpoint、run manifest 和最近日志；可选 Hugging Face checkpoint 上传只通过运行目录里的 `training_monitor_config.json` 配置，不写进 skill 源码。
-- 评测页支持平台配置、同步、11 个子任务、Think/No-think 样本、多输出切换、完整日志下载、评测对比，以及按平台分数或缓存本地自动指标做全局排行；即使日志里出现未收录的 `challenge_itemic_*`、`challenge_evolution_*`、`challenge_recommendation_*` 或 `challenge_common_sense` 变体，也会按家族兜底归类。
-- 每次同步成功后只在后台分析新增或变化的日志，完整解析结果压缩保存到 `<output-dir>/analysis_cache`；页面打开不触发批量分析，也不显示缓存进度，后续页面或服务重启直接复用有效缓存。
+## 强制路径约束
+
+每台机器的用户目录、代码目录、训练输出目录、单次运行目录和 SSH 配置都不同。本仓库只提供通用模板，不是作者机器的配置副本。
+
+每个使用者在启动前必须完成以下检查：
+
+1. 选择当前机器上的 Skill 安装目录；
+2. 默认目录不合适时，显式传入 `--target-dir` 和 `--output-dir`；
+3. 用 `--training-output-root` 传入一个或多个**当前机器上已经存在的绝对训练输出目录**，或设置支持的环境变量；
+4. 打开 `<target-dir>/training_monitor_config.json`，确认 `outputs_roots` 和 `targets.*` 中的每个路径都属于当前机器；
+5. 如果配置了显式任务，必须逐项替换 `output_dir`、`metrics_path`、`log_path` 和 `config_path`。
+6. 加载已有运行目录后，执行 `python "$MONITOR_TOOL" repair-paths`，或部署时添加 `--repair-paths`，自动删除另一台机器遗留的失效路径。
+
+禁止直接复制另一台机器的 `/root/...`、`/home/...`、Windows 盘符路径、个人 SSH 别名、Cookie、project ID、Hugging Face Token、PID、缓存或服务日志。路径不存在时必须修正或删除。这是本项目的硬性约束。
+
+新部署会保守地自动检查以下来源：命令行 `--training-output-root`、环境变量 `STREAMLAKE_TRAINING_OUTPUT_ROOT`、`LLAMA_FACTORY_OUTPUT_ROOT`、`LLAMA_FACTORY_OUTPUT_DIR`、`TRAINING_OUTPUT_ROOT`、`TRAINING_OUTPUT_DIR`，以及当前用户的 `~/output`、`~/LLaMA-Factory/output`、`./output`。只有已经存在的目录才会写入配置，不会扫描整个文件系统，也不会覆盖已经存在的运行配置。
+
+固定的运行目录模板是机器相关的 `$HOME/.local/share/streamlake-eval-monitor`，其下保存 `config/` 和 `data/`。训练目录先以 `<TRAINING_OUTPUT_ROOT>` 占位，部署时再由当前机器自动发现或显式传入。`repair-paths` 会在当前电脑上解析模板、删除失效的 `outputs_roots` 和 `targets`，保留真实存在的本地路径。
 
 ## 安装
 
-需要本地已安装 Git、Python 3.10 或更高版本，以及 Codex。
-
-### 首次安装
+要求：Git、Python 3.10 或更高版本，以及 Codex。
 
 ```bash
-mkdir -p ~/.codex/skills
-git clone https://github.com/hongchenyang0814-beep/streamlake-experiment-analyst.git \
-  ~/.codex/skills/streamlake-experiment-analyst
+SKILL_DIR="$HOME/.codex/skills/streamlake-experiment-analyst"
+mkdir -p "$(dirname "$SKILL_DIR")"
+git clone "https://github.com/<OWNER>/train-and-eval-monitor.git" "$SKILL_DIR"
+python "$SKILL_DIR/scripts/streamlake_experiments.py" --help
 ```
 
-### 验证安装
+将 `<OWNER>` 替换为项目维护者提供的仓库所有者；如果你已经拿到完整克隆地址，直接使用那个地址即可。
 
-下面的检查只读取本地文件，不会访问 StreamLake：
+重启 Codex 或新建任务，让 Skill 重新被发现。GitHub 仓库名称是 `Train and Eval Monitor`；为了兼容已有提示，Codex Skill 标识仍是 `streamlake-experiment-analyst`。
+
+更新已有安装：
 
 ```bash
-test -f ~/.codex/skills/streamlake-experiment-analyst/SKILL.md
-python ~/.codex/skills/streamlake-experiment-analyst/scripts/streamlake_experiments.py --help
+git -C "$HOME/.codex/skills/streamlake-experiment-analyst" pull --ff-only
 ```
 
-重启 Codex 或新建任务，让 Codex 重新发现 Skill。之后可以直接让 Codex 使用 `streamlake-experiment-analyst` 同步或对比实验。
+## 按当前机器路径部署
 
-### 更新已安装的 Skill
+以下命令在训练/评测服务器上执行。把训练输出目录替换为服务器上的真实绝对路径：
 
 ```bash
-git -C ~/.codex/skills/streamlake-experiment-analyst pull --ff-only
+SKILL_DIR="$HOME/.codex/skills/streamlake-experiment-analyst"
+MONITOR_TOOL="$SKILL_DIR/scripts/eval_monitor.py"
+TRAINING_ROOT="/absolute/path/to/your/training/output"
+TARGET_DIR="$HOME/.local/share/train-and-eval-monitor"
+
+python "$MONITOR_TOOL" deploy \
+  --target-dir "$TARGET_DIR" \
+  --output-dir "$TARGET_DIR/data" \
+  --training-output-root "$TRAINING_ROOT"
 ```
 
-更新后请重启 Codex 或新建任务。身份认证和项目 ID 属于安装后的配置；不要在克隆或更新命令中放入 Cookie。
+如果训练输出分散在多个目录，可以重复 `--training-output-root`。如果输出 `Training output roots: none detected`，必须先编辑 `<target-dir>/training_monitor_config.json` 再使用训练页。服务默认只监听 `127.0.0.1:18280`。
 
-## 配置
-
-推荐先运行 Monitor 的 `deploy`，再通过网页设置粘贴完整请求头。Cookie 和 project ID 会自动保存到统一运行目录，不要提交 Cookie，也不要把它放进命令行参数。
+管理服务：
 
 ```bash
-mkdir -p ~/.local/share/streamlake-eval-monitor/config
-chmod 700 ~/.local/share/streamlake-eval-monitor/config
-# 使用你信任的本地编辑器把 Cookie 写入下面的文件
-chmod 600 ~/.local/share/streamlake-eval-monitor/config/cookie
+python "$MONITOR_TOOL" status --target-dir "$TARGET_DIR"
+python "$MONITOR_TOOL" stop --target-dir "$TARGET_DIR"
+python "$MONITOR_TOOL" start --target-dir "$TARGET_DIR"
 ```
 
-默认路径是 `~/.local/share/streamlake-eval-monitor/config/cookie`，也可以通过 `STREAMLAKE_COOKIE_FILE` 修改。然后设置项目 ID：
+再次执行 `deploy` 会升级网页和后端文件，但会保留运行配置、凭据、缓存、上传 registry、PID 和日志。升级后仍要重新检查路径；Skill 不会静默改写已有个人配置。
+
+## 配置训练上传
+
+训练页右上角齿轮只负责保存或替换 Hugging Face Write Access Token。Token 保存于 `<target-dir>/config/huggingface_token`，权限为 `600`，不会回显，也不会进入训练配置。
+
+仓库创建和 checkpoint 上传按运行配置中的“分类 profile”执行。profile 的 key 与真实目录分类精确对应：一级分类使用 `<输出根目录>/<分类>/<run-id>/`，二级分类使用 `<输出根目录>/<分类>/<子分类>/<run-id>/`。可上传的运行目录必须同时存在 `trainer_log.jsonl` 和 `training_config.yaml`，且 `run_id` 必须等于目录名。没有精确匹配 profile 的分类仍会被监控，但不能上传。每个要上传的分类应配置独立的仓库前缀：
+
+```json
+{
+  "outputs_roots": ["/absolute/path/to/your/training/output"],
+  "targets": [],
+  "auto_upload": {
+    "config_file": "training_config.yaml",
+    "profiles": {
+      "lora_sft": {
+        "hub_endpoint": "https://huggingface.co",
+        "hub_owner": "YOUR_NAMESPACE",
+        "hub_repo_prefix": "lora-sft",
+        "hub_private_repo": true,
+        "hub_index_repo_id": "YOUR_NAMESPACE/lora_sft",
+        "base_model_id": "ORG/BASE_MODEL"
+      },
+      "ai_infra/benchmark": {
+        "hub_endpoint": "https://huggingface.co",
+        "hub_owner": "YOUR_NAMESPACE",
+        "hub_repo_prefix": "benchmark",
+        "hub_private_repo": true,
+        "base_model_id": "ORG/BASE_MODEL"
+      }
+    }
+  }
+}
+```
+
+以后路径变化时，只需增删或修改 `profiles` 的 key。key 是 `outputs_roots` 下、最终运行目录之前的相对路径。即使显式添加 `targets`，也必须遵循同一目录规则：`config_path` 必须是运行目录内的 `training_config.yaml`，`run_id` 必须与目录名一致。Monitor 会按 `<owner>/<prefix>-<run-id>-<五位step>` 创建不可变的独立仓库，准备评测文件、创建仓库、上传并更新可选索引；同一个 run/step 成功后不会重复上传。
+
+## 训练说明文档硬性规范
+
+AI 每次准备执行训练前，都必须在本次运行目录生成并校验说明文档：
 
 ```bash
-export STREAMLAKE_PROJECT_ID="proj-your-project-id"
+MANIFEST_TOOL="$HOME/.codex/skills/streamlake-experiment-analyst/scripts/experiment_manifest.py"
+python "$MANIFEST_TOOL" init --output-dir "/absolute/path/to/run-output"
+# AI 填写 run_manifest.json 的必填字段
+python "$MANIFEST_TOOL" validate --output-dir "/absolute/path/to/run-output"
+python "$MANIFEST_TOOL" render --output-dir "/absolute/path/to/run-output"
 ```
 
-也可以将项目 ID 单独保存到 `~/.local/share/streamlake-eval-monitor/config/project_id`，或给 `probe` / `sync` 传入 `--project-id`。优先级依次为命令行参数、环境变量和该配置文件。
+必填字段为 `schema_version`、`run_id`、`title`、`purpose`、`hypothesis`、`changes`、`comparison_run`、`dataset`、`model`、`config_file`、`expected_result`、`notes` 和 `created_at`。`config_file` 只能是运行目录内的文件名，不能写另一台机器的绝对路径。校验失败时，AI 不得启动训练命令；训练参数或基线改变时必须重新更新并渲染。机器可读文件是 `run_manifest.json`，可读文件是同目录的 `training_task.md`。
 
-## 使用
+评测页标题区的“绑定训练任务”会读取训练 Monitor 发现的运行目录，并在概览中展示这两份说明。只有 `run_manifest.json` 存在且通过校验的训练任务可以绑定；无说明或字段不完整的任务会被禁用。这样评测记录能明确对应哪一次训练，而不会把模型名当作绑定关系。
+
+## 配置 StreamLake
+
+打开评测页设置，从已登录的 StreamLake 浏览器 Network 面板复制完整请求头。优先选择 Referer 包含 `/wanqing/proj-.../` 的请求；Monitor 会解析 Cookie 和 project ID，且不会回显 Cookie。
+
+CLI 默认将它们保存到 `<target-dir>/config/cookie` 和 `<target-dir>/config/project_id`。project ID 也可通过 `STREAMLAKE_PROJECT_ID` 或 `--project-id` 提供。凭据禁止进入 Git、命令历史、README 或截图。
+
+## 启动和访问网页
+
+服务器端：
 
 ```bash
-TOOL="$HOME/.codex/skills/streamlake-experiment-analyst/scripts/streamlake_experiments.py"
-
-python "$TOOL" probe
-python "$TOOL" sync
-python "$TOOL" download-log 评测ID
-# 可选：进一步缩小时间范围
-python "$TOOL" sync --since 2026-08-15T00:00:00Z
-python "$TOOL" status
-python "$TOOL" list
-python "$TOOL" compare 实验ID1 实验ID2 \
-  --baseline 实验ID1 --primary-metric score
-python "$TOOL" context
+python "$MONITOR_TOOL" deploy --target-dir "$TARGET_DIR" --training-output-root "$TRAINING_ROOT"
 ```
 
-### 部署统一 Monitor
-
-```bash
-MONITOR_TOOL="$HOME/.codex/skills/streamlake-experiment-analyst/scripts/eval_monitor.py"
-
-# 部署或升级，并在 127.0.0.1:18280 后台启动
-python "$MONITOR_TOOL" deploy
-
-# 查看、停止、重新启动
-python "$MONITOR_TOOL" status
-python "$MONITOR_TOOL" stop
-python "$MONITOR_TOOL" start
-```
-
-首次打开网页后，在评测页按设置弹窗说明从 StreamLake 开发者工具复制完整请求头并粘贴保存。服务自动提取 Cookie 和 project ID，不会在页面回显 Cookie。顶部切换栏可打开 `/train/` 训练监控页。
-
-训练页默认运行配置是 `~/.local/share/streamlake-eval-monitor/training_monitor_config.json`，初始扫描 `/root/output`。如需自定义训练输出目录、显式 PID/日志路径或 Hugging Face 上传参数，请修改这个运行目录中的配置文件；不要把个人配置提交到 skill 源码。
-
-先在服务器执行上面的 `deploy`。然后在运行浏览器的当前设备上新开终端并保持 SSH 隧道运行，不要在远端 SSH 会话中执行：
+在运行浏览器的当前设备上新开终端并保持 SSH 隧道：
 
 ```bash
 ssh -N -L 18280:127.0.0.1:18280 USER@SERVER
 ```
 
-将 `USER@SERVER` 替换为真实的 `用户名@服务器地址`；非默认 SSH 端口需添加 `-p SSH端口`。个人 SSH 别名只有在当前设备已经配置时才能使用，skill 不会内置或假定任何个人别名。随后在当前设备打开 `http://127.0.0.1:18280/`。部署到自定义路径或端口可运行 `python "$MONITOR_TOOL" deploy --help`。
+将 `USER@SERVER` 换成真实 SSH 登录信息，需要非默认端口时添加 `-p SSH_PORT`。个人 SSH 别名只有在当前设备已经写入 SSH 配置时才能使用。浏览器打开 `http://127.0.0.1:18280/` 查看训练，打开 `http://127.0.0.1:18280/eval/` 查看评测日志。
 
-可用 `sync --log-dir 路径` 修改自动日志目录。每次同步的下载数、复用数和错误会写入 `sync_state.json` 的 `log_downloads` 字段；只有 `error_count=0` 且 `log_downloads.error_count=0` 时，元数据与日志覆盖才完整。
+训练页显示指标、进度、GPU、run manifest、checkpoint、最近日志，并保留原 checkpoint 上传流程。评测页提供同步、任务分层、Think/No-think 样本、多输出查看、完整日志下载、对比、排行和持久化增量分析。普通同步硬性限制为 `2026-08-01T00:00:00Z`（含）之后的记录；无输出的失败任务会过滤，运行中的任务等出现输出后再下载日志，日志下载不设大小上限。
 
-本地输出包括：
+评测页顶部工具区提供“上传”和“同步”按钮，上传位于同步之前且使用不同颜色。上传文件会先用同一解析器校验，至少要识别出任务、样本或评测元数据；通过后原始文件永久保存到与平台同步相同的 `<output-dir>/logs/<eval-task-id>/evaluation.log`，同时保存分析缓存和 `evaluation_note.md`，左侧显示“自主上传”标签。上传时可以直接选择训练任务，之后也可以在详情页更换绑定；平台同步不会清理这些手工记录。
 
-- `experiments.sqlite`：实验、参数、指标、关联和同步错误。
-- `raw/`：脱敏后的轻量原始证据。
-- `exports/`：CSV 表格。
-- `catalog.md`：实验索引。
-- `context.md`：供 Codex 或其他 Vibe Coding 工具讨论的上下文。
-- `sync_state.json`：更新时间、覆盖数量和 `error_count`。
-- `analysis_cache/`：Monitor 生成的压缩日志解析结果，供后续页面和服务重启复用。
+## CLI 常用命令
 
-`error_count` 不为 0 表示部分接口未成功，不能声称完整覆盖。缺失指标不会被当成 0。
+```bash
+TOOL="$HOME/.codex/skills/streamlake-experiment-analyst/scripts/streamlake_experiments.py"
+python "$TOOL" probe
+python "$TOOL" sync
+python "$TOOL" status
+python "$TOOL" list
+python "$TOOL" compare 评测ID1 评测ID2 --baseline 评测ID1 --primary-metric score
+python "$TOOL" download-log 评测ID
+python "$TOOL" context
+```
 
-## 安全边界
-
-客户端只允许访问 `https://console.streamlake.com` 上已记录的列表、详情、训练指标和评估输出查询接口。`download-log` 可继续访问评测输出返回的 `safetyimg.com` HTTPS 日志地址，且不会转发 StreamLake Cookie；其他域名、修改类接口、模型下载和推理结果下载仍会被拒绝。
+只有在确实需要把日志放到其他位置时，才使用 `sync --log-dir 绝对路径`。`error_count` 或 `log_downloads.error_count` 非零时只能报告部分覆盖。
 
 ## 测试
 
 ```bash
 python tests/test_streamlake_experiments.py
 python tests/test_eval_monitor.py
-python -m py_compile scripts/streamlake_experiments.py
+python -m py_compile scripts/streamlake_experiments.py scripts/eval_monitor.py scripts/experiment_manifest.py scripts/release_check.py
+python scripts/release_check.py
 ```
 
-## 注意事项
+`release_check.py` 是发布前的便携性和隐私检查器。分享或发布前必须执行；它会检查 Monitor 文件是否齐全、模板是否含有机器路径或任务、是否混入运行时产物，以及是否出现非占位的个人路径、账号地址或凭据。
 
-- API 来自万擎前端的实际调用，平台升级后可能需要更新。
-- 只有评估任务、数据版本、split、候选集、指标 cutoff 和推理设置一致时，才能严谨比较。
-- 参数与结果之间默认只能描述为相关，除非有受控重复实验支持因果结论。
+## 安全边界
+
+StreamLake 客户端只使用记录在案的只读端点，并通过受控流程下载日志；不会把 StreamLake Cookie 发送给日志 CDN。Monitor 只监听回环地址，应通过 SSH 转发访问，不应直接暴露公网。不要提交运行凭据、生成数据、checkpoint、模型文件或个人路径配置。
 
 ## License
 
