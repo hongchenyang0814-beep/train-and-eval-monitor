@@ -32,10 +32,126 @@ TRAINING_CONFIG_TEMPLATE = "training_monitor_config.json"
 TEMPLATE_FILES = ("open_monitor_windows.ps1.template",)
 DEFAULT_TARGET = "~/.local/share/streamlake-eval-monitor"
 DEFAULT_PORT = 18280
+TRAINING_OUTPUT_ENV_VARS = (
+    "STREAMLAKE_TRAINING_OUTPUT_ROOT",
+    "LLAMA_FACTORY_OUTPUT_ROOT",
+    "LLAMA_FACTORY_OUTPUT_DIR",
+    "TRAINING_OUTPUT_ROOT",
+    "TRAINING_OUTPUT_DIR",
+)
 
 
 def expand(value: str | Path) -> Path:
     return Path(value).expanduser().resolve()
+
+
+def discover_training_output_roots(explicit: list[str] | None = None) -> list[str]:
+    """Return existing, machine-local training roots without assuming /root or a repo path."""
+    candidates: list[str] = list(explicit or [])
+    if not explicit:
+        environment_values: list[str] = []
+        for name in TRAINING_OUTPUT_ENV_VARS:
+            value = os.environ.get(name, "").strip()
+            if value:
+                environment_values.extend(part.strip() for part in value.split(os.pathsep) if part.strip())
+        if environment_values:
+            candidates.extend(environment_values)
+        else:
+            home = Path.home()
+            candidates.extend(
+                [
+                    str(home / "output"),
+                    str(home / "LLaMA-Factory" / "output"),
+                    str(Path.cwd() / "output"),
+                ]
+            )
+    roots: list[str] = []
+    seen: set[str] = set()
+    for value in candidates:
+        path = expand(value)
+        key = str(path)
+        if key in seen or not path.is_dir():
+            continue
+        seen.add(key)
+        roots.append(key)
+    return roots
+
+
+def training_config_payload(roots: list[str]) -> dict[str, Any]:
+    template = json.loads((ASSET_DIR / TRAINING_CONFIG_TEMPLATE).read_text(encoding="utf-8"))
+    if not isinstance(template, dict):
+        raise RuntimeError("Invalid training monitor configuration template")
+    template["outputs_roots"] = roots
+    return template
+
+
+def repair_training_paths(target: Path, explicit_roots: list[str] | None = None, write: bool = True) -> dict[str, Any]:
+    """Normalize a deployed training config to paths that exist on this machine."""
+    path = target / TRAINING_CONFIG_TEMPLATE
+    if not path.is_file():
+        raise RuntimeError(f"Training monitor configuration is missing: {path}")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"Invalid training monitor configuration: {path}") from error
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Invalid training monitor configuration: {path}")
+
+    before_roots = [str(item).strip() for item in value.get("outputs_roots", []) if str(item).strip()]
+    candidates = list(explicit_roots or []) + before_roots
+    roots = discover_training_output_roots(candidates) if candidates else discover_training_output_roots()
+    if not roots:
+        roots = discover_training_output_roots()
+
+    before_targets = value.get("targets", [])
+    targets: list[dict[str, Any]] = []
+    removed_targets = 0
+    removed_target_paths = 0
+    if isinstance(before_targets, list):
+        for item in before_targets:
+            if not isinstance(item, dict):
+                removed_targets += 1
+                continue
+            output_value = str(item.get("output_dir", "")).strip()
+            if not output_value or not expand(output_value).is_dir():
+                removed_targets += 1
+                continue
+            target_copy = dict(item)
+            output_dir = expand(output_value)
+            target_copy["output_dir"] = str(output_dir)
+            for field in ("metrics_path", "log_path", "config_path"):
+                if field not in target_copy or target_copy[field] in (None, ""):
+                    continue
+                candidate = Path(str(target_copy[field])).expanduser()
+                if not candidate.is_absolute():
+                    candidate = output_dir / candidate
+                candidate = candidate.resolve()
+                if candidate.is_file():
+                    target_copy[field] = str(candidate)
+                else:
+                    target_copy.pop(field, None)
+                    removed_target_paths += 1
+            if "pid" in target_copy:
+                target_copy.pop("pid", None)
+                removed_target_paths += 1
+            targets.append(target_copy)
+    else:
+        removed_targets = 1
+
+    changed = before_roots != roots or before_targets != targets
+    value["outputs_roots"] = roots
+    value["targets"] = targets
+    if write and changed:
+        atomic_write(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+    return {
+        "config_file": str(path),
+        "written": bool(write and changed),
+        "outputs_roots": roots,
+        "removed_roots": [item for item in before_roots if item not in roots],
+        "targets": len(targets),
+        "removed_targets": removed_targets,
+        "removed_target_paths": removed_target_paths,
+    }
 
 
 def atomic_write(path: Path, text: str, mode: int = 0o600) -> None:
@@ -186,12 +302,13 @@ def start_monitor(target: Path) -> int:
 
 
 def print_access(port: int) -> None:
-    print(f"Server-local URL: http://127.0.0.1:{port}/")
+    print(f"Training Monitor URL: http://127.0.0.1:{port}/")
+    print(f"Evaluation Monitor URL: http://127.0.0.1:{port}/eval/")
     print("On the computer where the browser runs, keep this command open:")
     print(f"  ssh -N -L {port}:127.0.0.1:{port} USER@SERVER")
-    print("Replace USER@SERVER with the real SSH login; add -p SSH_PORT when needed.")
     print("A personal SSH alias works only when that computer's SSH config defines it.")
-    print(f"Then open locally: http://127.0.0.1:{port}/")
+    print(f"Then open locally for training: http://127.0.0.1:{port}/")
+    print(f"Then open locally for evaluation: http://127.0.0.1:{port}/eval/")
 
 
 def deploy(args: argparse.Namespace) -> None:
@@ -226,8 +343,24 @@ def deploy(args: argparse.Namespace) -> None:
         os.chmod(target / name, 0o644)
     training_config = target / TRAINING_CONFIG_TEMPLATE
     if not training_config.is_file():
-        shutil.copy2(ASSET_DIR / TRAINING_CONFIG_TEMPLATE, training_config)
-        os.chmod(training_config, 0o600)
+        roots = discover_training_output_roots(args.training_output_root)
+        atomic_write(training_config, json.dumps(training_config_payload(roots), ensure_ascii=False, indent=2) + "\n", 0o600)
+    else:
+        roots = []
+        try:
+            current_training_config = json.loads(training_config.read_text(encoding="utf-8"))
+            if isinstance(current_training_config, dict) and isinstance(current_training_config.get("outputs_roots"), list):
+                roots = [str(item) for item in current_training_config["outputs_roots"] if str(item).strip()]
+        except (OSError, json.JSONDecodeError):
+            roots = []
+        if args.repair_paths:
+            repaired = repair_training_paths(target, args.training_output_root)
+            roots = repaired["outputs_roots"]
+            print(
+                "Path repair: kept {} training root(s), removed {} invalid target(s).".format(
+                    len(roots), repaired["removed_targets"]
+                )
+            )
 
     config = {
         "bind_host": "127.0.0.1",
@@ -237,6 +370,7 @@ def deploy(args: argparse.Namespace) -> None:
         "parser_dir": str(target),
         "cookie_file": str(cookie_dir / "cookie"),
         "project_id_file": str(cookie_dir / "project_id"),
+        "huggingface_token_file": str(cookie_dir / "huggingface_token"),
         "training_config_file": str(training_config),
         "training_upload_registry_file": str(target / "training_upload_registry.json"),
     }
@@ -246,6 +380,10 @@ def deploy(args: argparse.Namespace) -> None:
     print(f"Evaluation monitor deployed to {target}")
     print(f"Runtime config: {cookie_dir}")
     print(f"Experiment data: {output_dir}")
+    if roots:
+        print("Training output roots: " + ", ".join(roots))
+    else:
+        print("Training output roots: none detected; edit training_monitor_config.json before using the training tab.")
     if args.no_start:
         print(f"Start it with: {sys.executable} {Path(__file__).resolve()} start --target-dir {target}")
     else:
@@ -276,7 +414,29 @@ def build_parser() -> argparse.ArgumentParser:
     deploy_parser.add_argument("--target-dir", default=DEFAULT_TARGET)
     deploy_parser.add_argument("--output-dir", help="defaults to <target-dir>/data")
     deploy_parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    deploy_parser.add_argument(
+        "--training-output-root",
+        action="append",
+        help="existing local training output root; repeat for multiple roots (otherwise auto-detected)",
+    )
+    deploy_parser.add_argument(
+        "--repair-paths",
+        action="store_true",
+        help="normalize an existing training config to current-machine paths before starting",
+    )
     deploy_parser.add_argument("--no-start", action="store_true")
+
+    repair_parser = subparsers.add_parser(
+        "repair-paths",
+        help="remove invalid training roots/targets and keep paths that exist on this machine",
+    )
+    repair_parser.add_argument("--target-dir", default=DEFAULT_TARGET)
+    repair_parser.add_argument(
+        "--training-output-root",
+        action="append",
+        help="existing local training output root; repeat for multiple roots",
+    )
+    repair_parser.add_argument("--no-write", action="store_true", help="report repairs without changing the config")
 
     for command in ("start", "stop", "status"):
         command_parser = subparsers.add_parser(command)
@@ -290,6 +450,8 @@ def main(argv: list[str] | None = None) -> int:
         target = expand(getattr(args, "target_dir", DEFAULT_TARGET))
         if args.command == "deploy":
             deploy(args)
+        elif args.command == "repair-paths":
+            print(json.dumps(repair_training_paths(target, args.training_output_root, not args.no_write), ensure_ascii=False, indent=2))
         elif args.command == "start":
             start_monitor(target)
         elif args.command == "stop":

@@ -4,8 +4,10 @@
   "refresh_seconds": 30,
   "stale_after_seconds": 600,
   "max_scan_depth": 3,
-  "outputs_roots": [
-    "/root/output"
-  ],
-  "targets": []
+  "outputs_roots": [],
+  "targets": [],
+  "auto_upload": {
+    "config_file": "training_config.yaml",
+    "profiles": {}
+  }
 }

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +37,9 @@ PROJECT_ID_RE = re.compile(r"(?:^|/)(proj-[A-Za-z0-9-]+)(?:/|$)")
 MAX_CONFIG_BODY = 128 * 1024
 MAX_SYNC_MESSAGE = 8000
 ANALYSIS_CACHE_VERSION = 1
+MANUAL_INDEX_VERSION = 1
+BINDINGS_VERSION = 1
+MANUAL_FILENAME_RE = re.compile(r"[\x00-\x1f]+")
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -165,11 +170,74 @@ class EvaluationRepository:
         self.output_dir = output_dir
         self.db_path = output_dir / "experiments.sqlite"
         self.logs_dir = output_dir / "logs"
+        self.legacy_manual_dir = output_dir / "manual_evaluations"
+        self.manual_index_path = output_dir / "manual_evaluations.json"
+        self.bindings_path = output_dir / "evaluation_training_bindings.json"
         self.analysis_cache_dir = output_dir / "analysis_cache"
         self.parser = parser_module
         self.cache: dict[str, dict[str, Any]] = {}
         self.lock = threading.RLock()
         self.analysis_locks: dict[str, threading.Lock] = {}
+
+    def _read_json_file(self, path: Path, default: Any) -> Any:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return default
+
+    def _manual_records(self) -> dict[str, dict[str, Any]]:
+        payload = self._read_json_file(self.manual_index_path, {})
+        if not isinstance(payload, dict):
+            return {}
+        records = payload.get("records", payload)
+        if not isinstance(records, dict):
+            return {}
+        return {str(key): value for key, value in records.items() if isinstance(value, dict)}
+
+    def _bindings(self) -> dict[str, dict[str, Any]]:
+        payload = self._read_json_file(self.bindings_path, {})
+        if not isinstance(payload, dict):
+            return {}
+        bindings = payload.get("bindings", payload)
+        if not isinstance(bindings, dict):
+            return {}
+        return {str(key): value for key, value in bindings.items() if isinstance(value, dict)}
+
+    def _write_manual_records(self, records: Mapping[str, Any]) -> None:
+        atomic_write_secret(
+            self.manual_index_path,
+            json.dumps({"version": MANUAL_INDEX_VERSION, "records": records}, ensure_ascii=False, indent=2),
+        )
+
+    def _write_bindings(self, bindings: Mapping[str, Any]) -> None:
+        atomic_write_secret(
+            self.bindings_path,
+            json.dumps({"version": BINDINGS_VERSION, "bindings": bindings}, ensure_ascii=False, indent=2),
+        )
+
+    def _manual_record(self, evaluation_id: str) -> dict[str, Any] | None:
+        return self._manual_records().get(evaluation_id)
+
+    def _manual_log_path(self, evaluation_id: str) -> Path:
+        return self.logs_dir / evaluation_id / "evaluation.log"
+
+    def _legacy_manual_log_path(self, evaluation_id: str) -> Path:
+        return self.legacy_manual_dir / evaluation_id / "evaluation.log"
+
+    def _record_exists(self, evaluation_id: str) -> bool:
+        if self._manual_record(evaluation_id) is not None:
+            return True
+        if EVALUATION_ID_RE.fullmatch(evaluation_id) is None or not self.db_path.is_file():
+            return False
+        try:
+            self._row(evaluation_id)
+        except (FileNotFoundError, ValueError):
+            return False
+        return True
+
+    def _binding_for(self, evaluation_id: str) -> dict[str, Any] | None:
+        binding = self._bindings().get(evaluation_id)
+        return dict(binding) if isinstance(binding, dict) else None
 
     def _connect(self) -> sqlite3.Connection:
         if not self.db_path.is_file():
@@ -192,6 +260,14 @@ class EvaluationRepository:
         return row
 
     def _log_path(self, evaluation_id: str) -> Path:
+        if self._manual_record(evaluation_id) is not None:
+            current_path = self._manual_log_path(evaluation_id)
+            if current_path.is_file():
+                return current_path
+            legacy_path = self._legacy_manual_log_path(evaluation_id)
+            if legacy_path.is_file():
+                return legacy_path
+            return current_path
         return self.logs_dir / evaluation_id / "evaluation.log"
 
     def download_log_path(self, evaluation_id: str) -> Path:
@@ -220,14 +296,15 @@ class EvaluationRepository:
         }
 
     def analysis_inventory(self) -> list[tuple[str, dict[str, int]]]:
-        if not self.logs_dir.is_dir():
-            return []
-        result = []
-        for path in sorted(self.logs_dir.glob("*/evaluation.log")):
-            evaluation_id = path.parent.name
-            if EVALUATION_ID_RE.fullmatch(evaluation_id):
-                result.append((evaluation_id, self._signature(path)))
-        return result
+        result: dict[str, dict[str, int]] = {}
+        for directory in (self.legacy_manual_dir, self.logs_dir):
+            if not directory.is_dir():
+                continue
+            for path in sorted(directory.glob("*/evaluation.log")):
+                evaluation_id = path.parent.name
+                if EVALUATION_ID_RE.fullmatch(evaluation_id):
+                    result[evaluation_id] = self._signature(path)
+        return sorted(result.items())
 
     def _analysis_lock(self, evaluation_id: str) -> threading.Lock:
         with self.lock:
@@ -360,39 +437,185 @@ class EvaluationRepository:
             temporary.unlink(missing_ok=True)
 
     def list_evaluations(self) -> list[dict[str, Any]]:
-        if not self.db_path.is_file():
-            return []
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT id,name,status,created_at,updated_at,raw_json FROM experiments "
-                "WHERE experiment_type='evaluation' ORDER BY created_at DESC,id"
-            ).fetchall()
         result = []
-        for row in rows:
-            raw = json.loads(row["raw_json"])
-            detail = raw.get("detail") if isinstance(raw.get("detail"), dict) else {}
-            summary = nested(detail, "metrics", "metrics", "summary", default={})
-            log_path = self._log_path(row["id"])
+        if self.db_path.is_file():
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT id,name,status,created_at,updated_at,raw_json FROM experiments "
+                    "WHERE experiment_type='evaluation'"
+                ).fetchall()
+            for row in rows:
+                raw = json.loads(row["raw_json"])
+                detail = raw.get("detail") if isinstance(raw.get("detail"), dict) else {}
+                summary = nested(detail, "metrics", "metrics", "summary", default={})
+                log_path = self._log_path(row["id"])
+                result.append(
+                    {
+                        "id": row["id"],
+                        "name": row["name"],
+                        "model_name": detail.get("modelName") or raw.get("modelName") or "",
+                        "base_model": detail.get("baseModel") or detail.get("sourceModel") or raw.get("baseModel") or raw.get("sourceModel") or "",
+                        "status": detail.get("taskStatus") or raw.get("taskStatus") or row["status"] or "UNKNOWN",
+                        "created_at": row["created_at"] or "",
+                        "end_time": detail.get("endTime") or raw.get("endTime") or "",
+                        "duration": detail.get("duration") or raw.get("duration"),
+                        "score": summary.get("totalScore", detail.get("score", raw.get("score"))),
+                        "groups": {key: summary.get(key) for key in ("r0", "r1", "r2", "r3")},
+                        "has_output": bool(detail.get("hasOutput", raw.get("hasOutput", False))),
+                        "origin": "platform_sync",
+                        "manual": False,
+                        "source_label": "平台同步",
+                        "training_binding": self._binding_for(row["id"]),
+                        "log": {
+                            "available": log_path.is_file(),
+                            "size_bytes": log_path.stat().st_size if log_path.is_file() else 0,
+                        },
+                    }
+                )
+
+        for evaluation_id, record in self._manual_records().items():
+            evaluation = record.get("evaluation") if isinstance(record.get("evaluation"), dict) else record
+            log_path = self._log_path(evaluation_id)
             result.append(
                 {
-                    "id": row["id"],
-                    "name": row["name"],
-                    "model_name": detail.get("modelName") or raw.get("modelName") or "",
-                    "base_model": detail.get("baseModel") or detail.get("sourceModel") or raw.get("baseModel") or raw.get("sourceModel") or "",
-                    "status": detail.get("taskStatus") or raw.get("taskStatus") or row["status"] or "UNKNOWN",
-                    "created_at": row["created_at"] or "",
-                    "end_time": detail.get("endTime") or raw.get("endTime") or "",
-                    "duration": detail.get("duration") or raw.get("duration"),
-                    "score": summary.get("totalScore", detail.get("score", raw.get("score"))),
-                    "groups": {key: summary.get(key) for key in ("r0", "r1", "r2", "r3")},
-                    "has_output": bool(detail.get("hasOutput", raw.get("hasOutput", False))),
+                    "id": evaluation_id,
+                    "name": evaluation.get("name") or record.get("filename") or evaluation_id,
+                    "model_name": evaluation.get("model_name", ""),
+                    "base_model": evaluation.get("base_model", ""),
+                    "status": evaluation.get("status", "UPLOADED"),
+                    "created_at": evaluation.get("created_at", ""),
+                    "end_time": evaluation.get("end_time", ""),
+                    "duration": evaluation.get("duration"),
+                    "score": evaluation.get("score"),
+                    "groups": evaluation.get("groups", {}),
+                    "has_output": bool(evaluation.get("has_output", True)),
+                    "origin": "manual_upload",
+                    "manual": True,
+                    "source_label": "自主上传",
+                    "filename": record.get("filename", ""),
+                    "training_binding": self._binding_for(evaluation_id),
                     "log": {
                         "available": log_path.is_file(),
                         "size_bytes": log_path.stat().st_size if log_path.is_file() else 0,
                     },
                 }
             )
+        result.sort(key=lambda item: (iso_to_timestamp(str(item.get("created_at", ""))), item["id"]), reverse=True)
         return result
+
+    def _write_manual_note(self, evaluation_id: str, record: Mapping[str, Any]) -> None:
+        evaluation = record.get("evaluation") if isinstance(record.get("evaluation"), Mapping) else {}
+        validation = record.get("validation") if isinstance(record.get("validation"), Mapping) else {}
+        binding = self._binding_for(evaluation_id)
+        lines = [
+            "# 评测日志说明",
+            "",
+            f"- 来源：自主上传",
+            f"- 文件：{record.get('filename', '')}",
+            f"- 评测 ID：{evaluation_id}",
+            f"- 上传时间：{evaluation.get('created_at', '')}",
+            f"- SHA-256：{record.get('sha256', '')}",
+            f"- 解析器版本：{validation.get('parser_version', '')}",
+            f"- 识别任务数：{validation.get('recognized_task_count', 0)}",
+            f"- 展示样本数：{validation.get('sample_count', 0)}",
+            f"- 完成任务数：{validation.get('completed_count', 0)}",
+            f"- 解析异常数：{validation.get('issue_count', 0)}",
+        ]
+        if binding:
+            lines.extend(["", "## 绑定训练任务", f"- 任务：{binding.get('label', binding.get('id', ''))}", f"- 任务 ID：{binding.get('id', '')}"])
+        else:
+            lines.extend(["", "## 绑定训练任务", "尚未绑定训练任务。"])
+        note_path = self._log_path(evaluation_id).parent / "evaluation_note.md"
+        atomic_write_secret(note_path, "\n".join(lines) + "\n",)
+
+    def add_manual_log(self, source_path: Path, filename: str, training_binding: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        safe_name = str(filename or "evaluation.log").replace("\\", "/").split("/")[-1]
+        safe_name = MANUAL_FILENAME_RE.sub("_", safe_name).strip("._")[:180] or "evaluation.log"
+        raw = source_path.read_bytes()
+        if not raw:
+            raise ValueError("评测日志为空")
+        try:
+            text, encoding = self.parser.decode_log_bytes(raw)
+            parsed = self.parser.parse_log(text, safe_name, len(raw))
+        except (UnicodeError, ValueError, TypeError) as error:
+            raise ValueError(f"评测日志无法解析：{error}") from error
+        if not isinstance(parsed, dict):
+            raise ValueError("评测日志解析结果无效")
+        tasks = parsed.get("tasks") if isinstance(parsed.get("tasks"), list) else []
+        recognized = [task for task in tasks if isinstance(task, Mapping) and task.get("status") != "未发现"]
+        samples = parsed.get("samples") if isinstance(parsed.get("samples"), list) else []
+        metadata = parsed.get("metadata") if isinstance(parsed.get("metadata"), Mapping) else {}
+        if not recognized and not samples and not metadata:
+            raise ValueError("文件不是可识别的评测日志：未发现任务、样本或评测元数据")
+        digest = hashlib.sha256(raw).hexdigest()
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        evaluation_id = f"eval-task-manual-{datetime.now().astimezone().strftime('%Y%m%d%H%M%S')}-{digest[:10]}-{secrets.token_hex(3)}"
+        destination = self._manual_log_path(evaluation_id)
+        destination.parent.mkdir(parents=True, exist_ok=False)
+        os.chmod(destination.parent, 0o700)
+        temporary = destination.with_suffix(".uploading")
+        temporary.write_bytes(raw)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, destination)
+        source = parsed.get("source") if isinstance(parsed.get("source"), Mapping) else {}
+        evaluation = {
+            "id": evaluation_id,
+            "name": safe_name,
+            "status": "UPLOADED",
+            "created_at": now,
+            "start_time": source.get("started_at", ""),
+            "end_time": source.get("ended_at", ""),
+            "duration": source.get("duration_seconds"),
+            "model_name": metadata.get("model_path", ""),
+            "base_model": "",
+            "score": None,
+            "groups": {},
+            "has_output": True,
+        }
+        record = {
+            "version": MANUAL_INDEX_VERSION,
+            "filename": safe_name,
+            "sha256": digest,
+            "encoding": encoding,
+            "validation": {
+                "parser_version": parsed.get("parser_version", getattr(self.parser, "PARSER_VERSION", 1)),
+                "recognized_task_count": len(recognized),
+                "sample_count": len(samples),
+                "completed_count": (parsed.get("summary") or {}).get("completed_count", 0),
+                "issue_count": len(parsed.get("issues") or []),
+            },
+            "evaluation": evaluation,
+        }
+        with self.lock:
+            records = self._manual_records()
+            records[evaluation_id] = record
+            self._write_manual_records(records)
+        signature = self._signature(destination)
+        parsed["encoding"] = encoding
+        self._write_persistent_cache(evaluation_id, signature, parsed)
+        with self.lock:
+            self.cache[evaluation_id] = {"signature": signature, "parsed": parsed}
+        if training_binding:
+            self.bind_training(evaluation_id, training_binding)
+        self._write_manual_note(evaluation_id, record)
+        return next(item for item in self.list_evaluations() if item["id"] == evaluation_id)
+
+    def bind_training(self, evaluation_id: str, binding: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not self._record_exists(evaluation_id):
+            raise FileNotFoundError("评测不存在")
+        bindings = self._bindings()
+        if binding is None:
+            bindings.pop(evaluation_id, None)
+        else:
+            allowed = {"id", "label", "run_id", "output_dir", "manifest"}
+            if set(binding) - allowed or not str(binding.get("id", "")).strip():
+                raise ValueError("训练任务绑定格式无效")
+            bindings[evaluation_id] = {key: binding[key] for key in allowed if key in binding}
+        self._write_bindings(bindings)
+        record = self._manual_record(evaluation_id)
+        if record:
+            self._write_manual_note(evaluation_id, record)
+        return bindings.get(evaluation_id)
 
     def ranking_rows(self) -> list[dict[str, Any]]:
         rows = self.list_evaluations()
@@ -437,6 +660,37 @@ class EvaluationRepository:
             return parsed
 
     def detail(self, evaluation_id: str) -> dict[str, Any]:
+        manual = self._manual_record(evaluation_id)
+        if manual is not None:
+            evaluation = manual.get("evaluation") if isinstance(manual.get("evaluation"), dict) else {}
+            response: dict[str, Any] = {
+                "evaluation": {
+                    **evaluation,
+                    "origin": "manual_upload",
+                    "manual": True,
+                    "source_label": "自主上传",
+                    "training_binding": self._binding_for(evaluation_id),
+                },
+                "analysis": None,
+                "training_binding": self._binding_for(evaluation_id),
+                "manual_note": str(self._log_path(evaluation_id).parent / "evaluation_note.md"),
+            }
+            try:
+                parsed = self._analysis(evaluation_id)
+            except FileNotFoundError:
+                return response
+            response["analysis"] = {
+                "source": parsed.get("source", {}),
+                "encoding": parsed.get("encoding", ""),
+                "metadata": parsed.get("metadata", {}),
+                "summary": parsed.get("summary", {}),
+                "noise": parsed.get("noise", {}),
+                "issues": parsed.get("issues", []),
+                "tasks": parsed.get("tasks", []),
+                "automatic_metrics": parsed.get("automatic_metrics", {}),
+                "sample_count": len(parsed.get("samples", [])),
+            }
+            return response
         row = self._row(evaluation_id)
         raw = json.loads(row["raw_json"])
         detail = raw.get("detail") if isinstance(raw.get("detail"), dict) else {}
@@ -461,8 +715,13 @@ class EvaluationRepository:
                 "score": summary.get("totalScore", detail.get("score", raw.get("score"))),
                 "groups": {key: summary.get(key) for key in ("r0", "r1", "r2", "r3")},
                 "contributions": contributions,
+                "origin": "platform_sync",
+                "manual": False,
+                "source_label": "平台同步",
+                "training_binding": self._binding_for(evaluation_id),
             },
             "analysis": None,
+            "training_binding": self._binding_for(evaluation_id),
         }
         try:
             parsed = self._analysis(evaluation_id)
@@ -715,6 +974,9 @@ class EvalMonitorServer(ThreadingHTTPServer):
             Path(config["training_config_file"]),
             self.training_upload_registry_path,
         )
+        if self.training_config is not None:
+            self.training_config["_monitor_config_file"] = str(Path(config["training_config_file"]).resolve())
+            self.training_config["_monitor_token"] = self.token
         self.analysis_manager.ensure_started()
 
     def record_training_upload(self, experiment_id: str, checkpoint_name: str, record: dict[str, Any]) -> None:
@@ -727,6 +989,30 @@ class EvalMonitorServer(ThreadingHTTPServer):
     def rotate_training_upload_nonce(self) -> None:
         if self.training_config is not None:
             self.training_config["_upload_nonce"] = secrets.token_urlsafe(24)
+
+    def training_tasks(self) -> list[dict[str, Any]]:
+        if self.training_module is None or self.training_config is None:
+            return []
+        tasks: list[dict[str, Any]] = []
+        now = time.time()
+        for target in self.training_module.discover_targets(self.training_config):
+            try:
+                experiment = self.training_module.build_experiment(target, self.training_config, now)
+            except Exception:
+                continue
+            tasks.append(
+                {
+                    "id": experiment.get("id", target.get("id", "")),
+                    "label": experiment.get("label", target.get("label", "")),
+                    "run_id": experiment.get("run_id", ""),
+                    "output_dir": experiment.get("output_dir", ""),
+                    "status": experiment.get("status", ""),
+                    "modified_at": experiment.get("modified_at"),
+                    "run_manifest": experiment.get("run_manifest", {"available": False}),
+                }
+            )
+        tasks.sort(key=lambda item: item.get("modified_at") or 0, reverse=True)
+        return tasks
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -747,6 +1033,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+        self.end_headers()
+
+    def _redirect(self, location: str, status: int = 302) -> None:
+        self.send_response(status)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
     def _json(self, value: Any, status: int = 200) -> None:
@@ -795,6 +1088,33 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(value, dict):
             raise ValueError("请求必须是 JSON 对象")
         return value
+
+    def _read_manual_upload(self) -> tuple[Path, str]:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise ValueError("上传长度无效") from error
+        if length <= 0:
+            raise ValueError("上传文件为空")
+        filename = Path(self.headers.get("X-Log-Filename", "evaluation.log")).name
+        if not filename or filename in {".", ".."}:
+            filename = "evaluation.log"
+        descriptor, temporary_name = tempfile.mkstemp(prefix="eval-upload-", suffix=".tmp")
+        temporary = Path(temporary_name)
+        try:
+            remaining = length
+            with os.fdopen(descriptor, "wb") as handle:
+                while remaining:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("上传文件提前结束")
+                    handle.write(chunk)
+                    remaining -= len(chunk)
+            os.chmod(temporary, 0o600)
+            return temporary, filename
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
 
     def _require_token(self) -> bool:
         if secrets.compare_digest(self.headers.get("X-Eval-Monitor-Token", ""), self.app.token):
@@ -860,7 +1180,7 @@ class Handler(BaseHTTPRequestHandler):
                 from huggingface_hub import HfApi
             except ImportError as error:
                 raise RuntimeError("huggingface_hub is not installed in the monitor environment") from error
-            api = HfApi(endpoint=str(target["hub_endpoint"]))
+            api = HfApi(endpoint=str(target["hub_endpoint"]), token=module.huggingface_token(config))
             api.create_repo(
                 repo_id=repo_id,
                 repo_type="model",
@@ -948,9 +1268,14 @@ class Handler(BaseHTTPRequestHandler):
         project_id = ""
         if project_path.is_file():
             project_id = project_path.read_text(encoding="utf-8").strip()
+        configured = cookie_path.is_file() and bool(project_id)
+        sync = self.app.sync_manager.snapshot()
+        sync_message = str(sync.get("message", ""))
+        expired = bool(configured and sync.get("status") == "error" and re.search(r"(?:401|403|cookie|auth|登录|认证|expired)", sync_message, re.IGNORECASE))
         return {
-            "configured": cookie_path.is_file() and bool(project_id),
+            "configured": configured,
             "cookie_configured": cookie_path.is_file(),
+            "cookie_status": "expired" if expired else "configured" if configured else "missing",
             "cookie_updated_at": datetime.fromtimestamp(cookie_path.stat().st_mtime).astimezone().isoformat(timespec="seconds") if cookie_path.is_file() else "",
             "project_id": project_id,
         }
@@ -960,7 +1285,10 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         query = parse_qs(parsed.query)
         try:
-            if path == "/":
+            if path in ("/", "/index.html"):
+                self._redirect("/train/")
+                return
+            if path in ("/eval", "/eval/", "/eval/index.html"):
                 raw = HTML_PATH.read_bytes()
                 self._headers("text/html; charset=utf-8", len(raw))
                 self.wfile.write(raw)
@@ -1016,6 +1344,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/rankings":
                 self._json({"rows": self.app.repository.ranking_rows()})
+                return
+            if path == "/api/training-tasks":
+                self._json({"tasks": self.app.training_tasks()})
+                return
+            if path == "/api/manual-evaluations":
+                self._json({"rows": [row for row in self.app.repository.list_evaluations() if row.get("manual")]})
                 return
             match = re.fullmatch(r"/api/evaluations/([^/]+)", path)
             if match:
@@ -1073,6 +1407,69 @@ class Handler(BaseHTTPRequestHandler):
                 atomic_write_secret(Path(self.app.config["cookie_file"]), cookie)
                 atomic_write_secret(Path(self.app.config["project_id_file"]), project_id)
                 self._json({"status": "saved", "config": self._config_status()})
+                return
+            if parsed.path == "/api/manual-logs":
+                temporary: Path | None = None
+                try:
+                    temporary, filename = self._read_manual_upload()
+                    task_id = self.headers.get("X-Training-Task-Id", "").strip()
+                    binding = None
+                    if task_id:
+                        task = next((item for item in self.app.training_tasks() if item.get("id") == task_id), None)
+                        if task is None:
+                            raise ValueError("指定的训练任务不存在或尚未被训练 Monitor 发现")
+                        manifest = task.get("run_manifest") if isinstance(task.get("run_manifest"), dict) else {}
+                        if not manifest.get("available") or not manifest.get("valid"):
+                            raise ValueError("该训练任务的 run_manifest.json 未通过校验，请先生成并补齐训练说明")
+                        binding = {
+                            "id": task.get("id", ""),
+                            "label": task.get("label", ""),
+                            "run_id": task.get("run_id", ""),
+                            "output_dir": task.get("output_dir", ""),
+                            "manifest": task.get("run_manifest", {"available": False}),
+                        }
+                    result = self.app.repository.add_manual_log(temporary, filename, binding)
+                    self.app.analysis_manager.ensure_started()
+                    self._json({"status": "saved", "evaluation": result}, HTTPStatus.CREATED)
+                finally:
+                    if temporary is not None:
+                        temporary.unlink(missing_ok=True)
+                return
+            if parsed.path == "/api/evaluation-bindings":
+                payload = self._read_small_json()
+                allowed = {"evaluation_id", "training_task_id"}
+                if set(payload) - allowed:
+                    raise ValueError("包含不支持的绑定字段")
+                evaluation_id = str(payload.get("evaluation_id", "")).strip()
+                if not evaluation_id:
+                    raise ValueError("缺少 evaluation_id")
+                task_id = str(payload.get("training_task_id", "")).strip()
+                binding = None
+                if task_id:
+                    task = next((item for item in self.app.training_tasks() if item.get("id") == task_id), None)
+                    if task is None:
+                        raise ValueError("指定的训练任务不存在或尚未被训练 Monitor 发现")
+                    manifest = task.get("run_manifest") if isinstance(task.get("run_manifest"), dict) else {}
+                    if not manifest.get("available") or not manifest.get("valid"):
+                        raise ValueError("该训练任务的 run_manifest.json 未通过校验，请先生成并补齐训练说明")
+                    binding = {
+                        "id": task.get("id", ""),
+                        "label": task.get("label", ""),
+                        "run_id": task.get("run_id", ""),
+                        "output_dir": task.get("output_dir", ""),
+                        "manifest": task.get("run_manifest", {"available": False}),
+                    }
+                saved = self.app.repository.bind_training(evaluation_id, binding)
+                self._json({"status": "saved", "training_binding": saved})
+                return
+            if parsed.path == "/train/api/huggingface":
+                if not self._training_ready():
+                    return
+                status = self.app.training_module.save_huggingface_binding(  # type: ignore[union-attr]
+                    self.app.training_config,
+                    self._read_small_json(),
+                )
+                self._json({"status": "saved", "huggingface": status})
                 return
             if parsed.path == "/api/sync":
                 if not self._config_status()["configured"]:

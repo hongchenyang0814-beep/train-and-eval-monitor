@@ -32,12 +32,15 @@
     .workspace-tab { min-height: 32px; display: inline-flex; align-items: center; padding: 0 12px; border: 1px solid transparent; color: var(--muted); text-decoration: none; font-size: 12px; }
     .workspace-tab:hover, .workspace-tab:focus-visible { color: var(--text); border-color: var(--line2); outline: none; }
     .workspace-tab.active { color: #071110; background: var(--cyan); border-color: var(--cyan); font-weight: 700; }
-    .connection { display: flex; align-items: center; gap: 8px; margin-right: auto; color: var(--muted); white-space: nowrap; }
+    .connection { display: flex; align-items: center; gap: 8px; margin-right: auto; color: var(--muted); white-space: nowrap; font-size: 11px; line-height: 1.4; font-weight: 400; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); }
     .dot.online { background: var(--green); box-shadow: 0 0 9px rgba(153,221,103,.55); }
+    .dot.warning { background: var(--amber); box-shadow: 0 0 9px rgba(238,187,92,.45); }
     .dot.error { background: var(--red); }
     .primary { background: var(--cyan); border-color: var(--cyan); color: #071110; font-weight: 700; }
     .primary:hover { background: #5ce2d6; }
+    .upload { background: #2a2114; border-color: #765d31; color: #e7c77d; font-weight: 700; }
+    .upload:hover { background: #3a2c19; border-color: #a68042; }
     .icon-btn { width: 38px; padding: 0; font-size: 18px; }
     .sync-icon { display: inline-block; margin-right: 7px; }
     .spinning { animation: spin 1s linear infinite; }
@@ -66,9 +69,11 @@
     .eval-score { color: #fff; font: 700 13px ui-monospace, SFMono-Regular, Consolas, monospace; }
     .eval-meta { display: flex; justify-content: space-between; gap: 8px; margin: 7px 0 0 15px; color: var(--muted); font-size: 10px; }
     .log-badge { color: var(--green); }
+    .source-badge { padding: 2px 5px; border: 1px solid #765d31; background: #2a2114; color: #e7c77d; font-size: 9px; white-space: nowrap; }
     .content { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
     .detail-head { min-height: 91px; padding: 14px 18px 11px; border-bottom: 1px solid var(--line); background: #0d1214; }
     .detail-top { display: flex; justify-content: space-between; gap: 18px; align-items: start; }
+    .detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
     .detail-top h1 { margin: 0; color: #fff; font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
     .detail-sub { margin-top: 5px; color: var(--muted); font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
     .status-pill { padding: 4px 8px; border: 1px solid var(--line2); border-radius: 3px; color: var(--cyan); font-size: 10px; white-space: nowrap; }
@@ -184,6 +189,12 @@
     .log-controls { flex-wrap: wrap; }
     .log-controls input { flex: 1 1 260px; min-width: min(260px,100%); }
     .download-log { white-space: nowrap; }
+    .binding-panel { grid-column: 1 / -1; }
+    .binding-summary { display: flex; justify-content: space-between; gap: 12px; align-items: start; flex-wrap: wrap; }
+    .binding-summary strong { color: var(--cyan); }
+    .doc-text { margin: 12px 0 0; padding: 12px; border: 1px solid var(--line); background: #0a0f11; color: #cbd6d3; font: 11px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+    .manual-upload-help { margin: 0 0 12px; color: var(--muted); font-size: 11px; }
+    #manualLogFile { width: 100%; padding: 9px; }
     .log-meta { padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }
     .log-view { margin: 0; padding: 14px 16px 30px; min-height: 400px; color: #cfd8d6; font: 11px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .compare-controls select { min-width: min(420px,60vw); }
@@ -194,7 +205,12 @@
     .ranking-controls { flex-wrap: wrap; align-items: center; }
     .ranking-controls select { min-width: min(360px,70vw); }
     .ranking-table { overflow-x: auto; }
-    .ranking-table .task-head, .ranking-table .task-row { min-width: 1180px; grid-template-columns: 54px minmax(260px,1.3fr) 88px 78px 78px 78px 78px minmax(135px,.8fr) minmax(250px,1fr) 90px; }
+    .ranking-table .task-head, .ranking-table .task-row { min-width: 1440px; grid-template-columns: 56px minmax(310px,1.35fr) 98px 86px 86px 86px 86px minmax(145px,.82fr) minmax(320px,1.1fr) 96px; gap: 0; padding: 0 16px; }
+    .ranking-table .task-head > *, .ranking-table .task-row > * { min-width: 0; min-height: 100%; padding: 12px 10px; text-align: center; }
+    .ranking-table .task-head > *, .ranking-table .task-row > .rank-number, .ranking-table .task-row > .mono, .ranking-table .task-row > .rank-focus, .ranking-table .task-row > .log-badge, .ranking-table .task-row > .muted { display: flex; align-items: center; justify-content: center; }
+    .ranking-table .task-row > .rank-target { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    .ranking-table .task-row > .ranking-auto { align-content: center; justify-content: center; }
+    .ranking-table .task-head > :nth-child(2), .ranking-table .task-row > :nth-child(2), .ranking-table .task-head > :nth-child(7), .ranking-table .task-row > :nth-child(7), .ranking-table .task-head > :nth-child(8), .ranking-table .task-row > :nth-child(8), .ranking-table .task-head > :nth-child(9), .ranking-table .task-row > :nth-child(9) { border-right: 1px solid var(--line); }
     .rank-number { color: var(--muted); font: 700 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
     .rank-target { min-width: 0; }
     .rank-target strong { display: block; overflow-wrap: anywhere; }
@@ -248,7 +264,8 @@
       .summary-item:nth-child(even) { border-right: 0; }
       .summary-value { font-size: 16px; }
       .detail-top { display: block; }
-      .status-pill { display: inline-block; margin-top: 8px; }
+      .detail-actions { justify-content: flex-start; margin-top: 8px; }
+      .status-pill { display: inline-block; }
       .score-grid { grid-template-columns: repeat(2,1fr); }
       .score-cell:nth-child(3) { border-right: 1px solid var(--line); }
       .score-cell:nth-child(even) { border-right: 0; }
@@ -264,8 +281,9 @@
 <body>
   <header class="topbar">
     <div class="brand"><strong>Evaluation Monitor</strong><span>STREAMLAKE / LOCAL LOG ANALYSIS</span></div>
-    <nav class="workspace-tabs" aria-label="工作台切换"><a class="workspace-tab active" href="/">评测日志</a><a class="workspace-tab" href="/train/">训练监控</a></nav>
+    <nav class="workspace-tabs" aria-label="工作台切换"><a class="workspace-tab" href="/">训练监控</a><a class="workspace-tab active" href="/eval/">评测日志</a></nav>
     <div class="connection"><span id="connectionDot" class="dot"></span><span id="connectionText">正在连接本地服务</span></div>
+    <button id="uploadBtn" class="upload" title="上传并分析一条本地评测日志"><span aria-hidden="true">↑</span> 上传</button>
     <button id="syncBtn" class="primary" disabled><span id="syncIcon" class="sync-icon">↻</span><span id="syncText">同步</span></button>
     <button id="settingsBtn" class="icon-btn" title="平台连接配置" aria-label="平台连接配置">⚙</button>
   </header>
@@ -303,6 +321,24 @@
       <div class="modal-actions"><button id="cancelConfig">取消</button><button id="saveConfig" class="primary">保存配置</button></div>
     </div>
   </dialog>
+  <dialog id="trainingBindingDialog">
+    <div class="modal-head"><h2>绑定训练任务</h2><button id="closeTrainingBinding" class="icon-btn" title="关闭" aria-label="关闭">×</button></div>
+    <div class="modal-body">
+      <p class="manual-upload-help">选择训练 Monitor 已发现的任务。评测页会读取该任务目录中的 <span class="mono">run_manifest.json</span> 和 <span class="mono">training_task.md</span>，不会复制训练日志。</p>
+      <select id="trainingTaskSelect" style="width:100%"><option value="">不绑定训练任务</option></select>
+      <div id="trainingTaskStatus" class="config-state" style="margin-top:12px">正在读取训练任务</div>
+      <div class="modal-actions"><button id="cancelTrainingBinding">取消</button><button id="saveTrainingBinding" class="primary">保存绑定</button></div>
+    </div>
+  </dialog>
+  <dialog id="manualUploadDialog">
+      <div class="modal-head"><h2>上传评测日志</h2><button id="closeManualUpload" class="icon-btn" title="关闭" aria-label="关闭">×</button></div>
+    <div class="modal-body">
+      <p class="manual-upload-help">上传原始评测日志。系统会校验可识别的任务/样本结构，保存原文件、解析缓存和说明文档；左侧会标记为“自主上传”。</p>
+      <input id="manualLogFile" type="file" accept=".log,.txt,application/octet-stream">
+      <select id="manualTrainingTaskSelect" style="width:100%;margin-top:10px"><option value="">不绑定训练任务</option></select>
+      <div class="modal-actions"><button id="cancelManualUpload">取消</button><button id="submitManualUpload" class="primary">上传并分析</button></div>
+    </div>
+  </dialog>
   <div id="toast" class="toast hidden"></div>
   <script>
     const TASK_CATALOG = [
@@ -315,7 +351,7 @@
     ];
     const TASK_LABELS = Object.fromEntries(TASK_CATALOG.map(([key,,label])=>[key,label]));
     const TASK_GROUPS = Object.fromEntries(TASK_CATALOG.map(([key,group])=>[key,group]));
-    const state = { snapshot:null, selectedId:localStorage.getItem('eval-monitor-selected')||'', detail:null, tab:'overview', token:'', samples:[], sample:null, compare:null, rankings:null, rankingMetric:localStorage.getItem('eval-monitor-ranking-metric')||'score', rankingAsc:localStorage.getItem('eval-monitor-ranking-asc')==='1', poll:null };
+    const state = { snapshot:null, selectedId:localStorage.getItem('eval-monitor-selected')||'', detail:null, tab:'overview', token:'', samples:[], sample:null, compare:null, rankings:null, trainingTasks:null, rankingMetric:localStorage.getItem('eval-monitor-ranking-metric')||'score', rankingAsc:localStorage.getItem('eval-monitor-ranking-asc')==='1', poll:null };
     const $ = id => document.getElementById(id);
     const esc = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
     const num = (value, digits=4) => value === null || value === undefined || value === '' ? '--' : Number(value).toFixed(digits).replace(/0+$/,'').replace(/\.$/,'');
@@ -340,8 +376,13 @@
       try {
         const previousRunning=state.snapshot?.sync?.running;
         state.snapshot=await api('/api/snapshot'); state.token=state.snapshot.token;
-        const connectionText=state.snapshot.config.configured?'本地服务在线 · 平台已配置':'本地服务在线 · 等待平台配置';
-        $('connectionDot').className='dot online'; $('connectionText').textContent=connectionText;
+        const cookieStatus=state.snapshot.config.cookie_status;
+        const connection=cookieStatus==='configured'
+          ? ['online','本地服务在线 · 数据已加载 · Cookie 已配置']
+          : cookieStatus==='expired'
+            ? ['warning','本地服务在线 · 数据已加载 · Cookie 已过期，请在齿轮中更新']
+            : ['error','本地服务在线 · 数据已加载 · Cookie 未配置，请在齿轮中配置'];
+        $('connectionDot').className=`dot ${connection[0]}`; $('connectionText').textContent=connection[1];
         renderSummary(); renderEvalList(); updateSyncButton(); renderConfigState();
         const ids=state.snapshot.evaluations.map(x=>x.id);
         if (!ids.includes(state.selectedId)) state.selectedId=ids[0]||'';
@@ -361,7 +402,7 @@
     }
     function renderEvalList() {
       const q=$('evalSearch').value.trim().toLowerCase(); const items=state.snapshot.evaluations.filter(x=>`${x.name} ${x.model_name} ${x.id}`.toLowerCase().includes(q)); $('filteredCount').textContent=`${items.length} 项`;
-      $('evalList').innerHTML=items.length?items.map(x=>`<button class="eval-item ${x.id===state.selectedId?'selected':''}" data-id="${esc(x.id)}"><div class="eval-title"><span class="status-dot ${statusClass(x.status)}"></span><span class="eval-name">${esc(x.name)}</span><span class="eval-score">${num(x.score)}</span></div><div class="eval-meta"><span>${esc(x.model_name||x.status)}</span><span class="${x.log.available?'log-badge':''}">${x.log.available?bytes(x.log.size_bytes):'无日志'}</span></div><div class="eval-meta"><span>${date(x.created_at)}</span><span>${duration(x.duration)}</span></div></button>`).join(''):'<div class="empty">没有匹配的评测记录</div>';
+      $('evalList').innerHTML=items.length?items.map(x=>`<button class="eval-item ${x.id===state.selectedId?'selected':''}" data-id="${esc(x.id)}"><div class="eval-title"><span class="status-dot ${statusClass(x.status)}"></span><span class="eval-name">${esc(x.name)}</span><span class="eval-score">${num(x.score)}</span></div><div class="eval-meta"><span>${esc(x.model_name||x.status)}</span><span>${x.manual?'<span class="source-badge">自主上传</span>':''} <span class="${x.log.available?'log-badge':''}">${x.log.available?bytes(x.log.size_bytes):'无日志'}</span></span></div><div class="eval-meta"><span>${date(x.created_at)}</span><span>${duration(x.duration)}</span></div></button>`).join(''):'<div class="empty">没有匹配的评测记录</div>';
       $('evalList').querySelectorAll('[data-id]').forEach(el=>el.addEventListener('click',()=>selectEvaluation(el.dataset.id)));
     }
     async function selectEvaluation(id, quiet=false) {
@@ -371,20 +412,35 @@
       catch(error) { $('tabView').innerHTML=`<div class="empty">${esc(error.message)}</div>`; if(!quiet) toast(error.message,true); }
     }
     function renderHeader() {
-      const e=state.detail.evaluation; $('detailHead').innerHTML=`<div class="detail-top"><div><h1>${esc(e.name)}</h1><div class="detail-sub">${esc(e.model_name)} · ${esc(e.id)} · ${date(e.start_time)} → ${date(e.end_time)}</div></div><span class="status-pill">${esc(e.status)}</span></div>`;
+      const e=state.detail.evaluation,summary=state.snapshot.evaluations.find(item=>item.id===e.id)||{},downloadButton=(summary.log?.available||state.detail.analysis?.source?.filename)?'<button id="downloadLog" class="download-log" title="将当前评测的完整原始日志下载到浏览器所在设备"><span aria-hidden="true">↓</span> 下载完整日志</button>':'',bindingLabel=state.detail.training_binding?'查看训练说明':'绑定训练任务'; $('detailHead').innerHTML=`<div class="detail-top"><div><h1>${esc(e.name)}</h1><div class="detail-sub">${esc(e.model_name)} · ${esc(e.id)} · ${date(e.start_time)} → ${date(e.end_time)}</div></div><div class="detail-actions"><button id="trainingBindingButton" title="${esc(bindingLabel)}">${esc(bindingLabel)}</button>${downloadButton}<span class="status-pill">${esc(e.status)}</span></div></div>`; if(downloadButton) $('downloadLog').onclick=downloadSelectedLog; $('trainingBindingButton').onclick=openTrainingBinding;
     }
+    function downloadSelectedLog(){if(!state.selectedId)return;const link=document.createElement('a');link.href=`/api/evaluations/${encodeURIComponent(state.selectedId)}/download-log`;link.download='';document.body.appendChild(link);link.click();link.remove();}
     function renderTab() {
       document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===state.tab));
       $('tabView').classList.toggle('isolated-scroll',state.tab==='samples');
       if(!state.detail) return; ({overview:renderOverview,tasks:renderTasks,samples:renderSamples,log:renderLog,compare:renderCompare,rankings:renderRankings,tools:renderTools}[state.tab]||renderOverview)();
     }
     function scoreCells(e) { return [['总分',e.score],['R0 懂物料',e.groups.r0],['R1 懂用户',e.groups.r1],['R2 懂推荐',e.groups.r2],['R3 常识',e.groups.r3]].map(([k,v])=>`<div class="score-cell"><span class="eyebrow">${k}</span><strong>${num(v,6)}</strong></div>`).join(''); }
+    function trainingManifestHTML(binding){
+      if(!binding) return '<section class="band binding-panel"><div class="binding-summary"><div><h3>关联训练任务</h3><div class="muted">当前评测尚未绑定训练任务。点击标题区的“绑定训练任务”后，评测页会显示训练说明。</div></div></div></section>';
+      const manifest=binding.manifest||{},doc=manifest.documentation||{};
+      const validity=manifest.valid===false?`<div class="issue">训练说明缺少必填字段：${esc((manifest.missing_fields||[]).join('、')||'请运行 experiment_manifest.py validate')}</div>`:'';
+      const text=doc.available&&doc.text?doc.text:`目的：${manifest.purpose||'--'}\n假设：${manifest.hypothesis||'--'}\n改动：${(manifest.changes||[]).join('；')||'--'}\n预期结果：${manifest.expected_result||'--'}\n备注：${manifest.notes||'--'}`;
+      return `<section class="band binding-panel"><div class="binding-summary"><div><h3>关联训练任务</h3><strong>${esc(binding.label||binding.id)}</strong><div class="muted">${esc(binding.run_id||binding.id)} · ${esc(manifest.title||'训练说明')}</div></div><button id="changeTrainingBinding">更换绑定</button></div>${validity}<pre class="doc-text">${esc(text)}</pre></section>`;
+    }
+    async function loadTrainingTasks(){ if(state.trainingTasks) return state.trainingTasks; const data=await api('/api/training-tasks'); state.trainingTasks=data.tasks||[]; return state.trainingTasks; }
+    function fillTrainingSelect(select,tasks,selected=''){ if(!select)return; select.innerHTML='<option value="">不绑定训练任务</option>'+tasks.map(task=>{const manifest=task.run_manifest||{},ready=manifest.available&&manifest.valid;return `<option value="${esc(task.id)}" ${task.id===selected?'selected':''} ${ready?'':'disabled'}>${esc(task.label||task.id)} · ${esc(task.run_id||'')}${ready?'':' · 说明未通过校验'}</option>`}).join(''); }
+    async function openTrainingBinding(){ const dialog=$('trainingBindingDialog'); if(!dialog)return; $('trainingTaskStatus').textContent='正在读取训练任务'; dialog.showModal(); try { const tasks=await loadTrainingTasks(); const selected=state.detail?.training_binding?.id||''; fillTrainingSelect($('trainingTaskSelect'),tasks,selected); $('trainingTaskStatus').textContent=tasks.length?`已发现 ${tasks.length} 个训练任务；保存后会在当前评测概览显示说明文档。`:'训练 Monitor 尚未发现可绑定的任务，请先配置训练输出目录并生成 run_manifest.json。'; } catch(error){ $('trainingTaskStatus').textContent=`读取失败：${error.message}`; } }
+    async function saveTrainingBinding(){ const button=$('saveTrainingBinding'); button.disabled=true; try { const taskId=$('trainingTaskSelect').value; await api('/api/evaluation-bindings',{method:'POST',headers:{'Content-Type':'application/json','X-Eval-Monitor-Token':state.token},body:JSON.stringify({evaluation_id:state.selectedId,training_task_id:taskId})}); $('trainingBindingDialog').close(); state.trainingTasks=null; await selectEvaluation(state.selectedId,true); toast(taskId?'训练任务绑定已保存':'已解除训练任务绑定'); } catch(error){ toast(error.message,true); } finally { button.disabled=false; } }
+    async function openManualUpload(){ const dialog=$('manualUploadDialog'); if(!dialog)return; $('manualLogFile').value=''; dialog.showModal(); try { fillTrainingSelect($('manualTrainingTaskSelect'),await loadTrainingTasks()); } catch(error){ $('manualTrainingTaskSelect').innerHTML='<option value="">训练任务列表不可用</option>'; } }
+    async function submitManualUpload(){ const file=$('manualLogFile').files[0],button=$('submitManualUpload'); if(!file){toast('请选择评测日志文件',true);return;} button.disabled=true; try { const headers={'X-Eval-Monitor-Token':state.token,'X-Log-Filename':file.name}; const taskId=$('manualTrainingTaskSelect').value; if(taskId)headers['X-Training-Task-Id']=taskId; const result=await api('/api/manual-logs',{method:'POST',headers,body:file}); $('manualUploadDialog').close(); state.trainingTasks=null; state.rankings=null; await loadSnapshot(true); if(result.evaluation?.id) await selectEvaluation(result.evaluation.id,true); toast('日志已永久保存并完成解析'); } catch(error){toast(error.message,true);} finally {button.disabled=false;} }
     function renderOverview() {
-      const {evaluation:e,analysis:a}=state.detail; if(!a){$('tabView').innerHTML=`<div class="score-grid">${scoreCells(e)}</div><div class="empty">该评测尚未产生可分析的本地日志；同步会在平台输出可用后自动下载。</div>`;return;}
+      const {evaluation:e,analysis:a}=state.detail; if(!a){$('tabView').innerHTML=`<div class="score-grid">${scoreCells(e)}</div><div class="overview-grid">${trainingManifestHTML(state.detail.training_binding)}<div class="empty">该评测尚未产生可分析的本地日志；同步会在平台输出可用后自动下载。</div></div>`;return;}
       const s=a.summary||{}, source=a.source||{}, metadata=a.metadata||{};
       const groups=[['r0','懂物料'],['r1','懂用户'],['r2','懂推荐'],['r3','常识']];
       const colors={r0:'var(--cyan)',r1:'var(--blue)',r2:'var(--green)',r3:'var(--amber)'};
-      $('tabView').innerHTML=`<div class="score-grid">${scoreCells(e)}</div><div class="overview-grid"><section class="band"><h3>平台评分构成</h3>${groups.map(([g,label])=>`<div class="progress-row" style="--bar-color:${colors[g]}"><span>${label}</span><span class="progress-track"><span class="progress-fill" style="width:${Math.min(100,Math.max(0,Number(e.groups[g])||0)/0.8*100)}%"></span></span><strong class="mono progress-value">${num(e.groups[g],6)}</strong></div>`).join('')}</section><section class="band"><h3>日志解析</h3><div class="kv-grid"><div class="kv"><span>完成任务</span><strong>${s.completed_count??0} / ${s.task_count??0}</strong></div><div class="kv"><span>样本详情</span><strong>${s.sample_detail_count??0}</strong></div><div class="kv"><span>保留日志行</span><strong>${s.retained_line_count??0} / ${s.raw_line_count??0}</strong></div><div class="kv"><span>解析异常</span><strong>${s.issue_count??0}</strong></div></div></section><section class="band"><h3>运行信息</h3><div class="kv-grid"><div class="kv"><span>基础模型</span><strong>${esc(e.base_model||'--')}</strong></div><div class="kv"><span>平台耗时</span><strong>${duration(e.duration)}</strong></div><div class="kv"><span>日志运行时间</span><strong>${duration(source.duration_seconds)}</strong></div><div class="kv"><span>日志大小</span><strong>${bytes(source.file_size)}</strong></div><div class="kv"><span>评测版本</span><strong>${esc(metadata.version||'--')}</strong></div><div class="kv"><span>Seed</span><strong>${esc(metadata.seed||'--')}</strong></div></div></section><section class="band"><h3>解析诊断</h3>${a.issues?.length?a.issues.map(x=>`<div class="issue">${esc(typeof x==='string'?x:JSON.stringify(x))}</div>`):'<div class="muted">未发现结构化日志异常</div>'}</section></div>`;
+      $('tabView').innerHTML=`<div class="score-grid">${scoreCells(e)}</div><div class="overview-grid"><section class="band"><h3>平台评分构成</h3>${groups.map(([g,label])=>`<div class="progress-row" style="--bar-color:${colors[g]}"><span>${label}</span><span class="progress-track"><span class="progress-fill" style="width:${Math.min(100,Math.max(0,Number(e.groups[g])||0)/0.8*100)}%"></span></span><strong class="mono progress-value">${num(e.groups[g],6)}</strong></div>`).join('')}</section><section class="band"><h3>日志解析</h3><div class="kv-grid"><div class="kv"><span>完成任务</span><strong>${s.completed_count??0} / ${s.task_count??0}</strong></div><div class="kv"><span>样本详情</span><strong>${s.sample_detail_count??0}</strong></div><div class="kv"><span>保留日志行</span><strong>${s.retained_line_count??0} / ${s.raw_line_count??0}</strong></div><div class="kv"><span>解析异常</span><strong>${s.issue_count??0}</strong></div></div></section><section class="band"><h3>运行信息</h3><div class="kv-grid"><div class="kv"><span>基础模型</span><strong>${esc(e.base_model||'--')}</strong></div><div class="kv"><span>平台耗时</span><strong>${duration(e.duration)}</strong></div><div class="kv"><span>日志运行时间</span><strong>${duration(source.duration_seconds)}</strong></div><div class="kv"><span>日志大小</span><strong>${bytes(source.file_size)}</strong></div><div class="kv"><span>评测版本</span><strong>${esc(metadata.version||'--')}</strong></div><div class="kv"><span>Seed</span><strong>${esc(metadata.seed||'--')}</strong></div></div></section><section class="band"><h3>解析诊断</h3>${a.issues?.length?a.issues.map(x=>`<div class="issue">${esc(typeof x==='string'?x:JSON.stringify(x))}</div>`):'<div class="muted">未发现结构化日志异常</div>'}</section>${trainingManifestHTML(state.detail.training_binding)}</div>`;
+      const changeButton=$('changeTrainingBinding'); if(changeButton)changeButton.onclick=openTrainingBinding;
     }
     function contributionMap() { const map={}; const c=state.detail.evaluation.contributions||{}; Object.entries(c).forEach(([group,rows])=>(rows||[]).forEach(x=>map[x.task]={...x,group})); return map; }
     function pct(value) { const n=Number(value); return Number.isFinite(n)?`${(n*100).toFixed(1)}%`:'--'; }
@@ -450,7 +506,7 @@
       el.querySelectorAll('.output-index').forEach(button=>button.addEventListener('click',()=>{const section=button.closest('.variant-section');if(!section)return;const mode=section.dataset.variant,outputs=variants[mode]?.outputs||[],position=Number(button.dataset.outputPos),output=outputs[position],positionEl=section.querySelector('.output-position'),titleEl=section.querySelector('.text-block.output h4'),outputEl=section.querySelector('.text-block.output pre');if(!output||!positionEl||!titleEl||!outputEl)return;section.querySelectorAll('.output-index').forEach(item=>{const active=item===button;item.classList.toggle('active',active);item.setAttribute('aria-selected',String(active))});positionEl.textContent=`第 ${position+1} / ${outputs.length} 个`;titleEl.textContent=`Output ${output.index}`;if(isActionTask){const result=highlightedSidText(output.text,variants[mode]?.input||'');outputEl.innerHTML=result.html;const summary=section.querySelector('.sid-summary');if(summary)summary.outerHTML=sidSummary(result.analysis);}else outputEl.textContent=output.text||'--';}));
     }
     async function loadLog(offset=0){const q=$('logQuery')?.value||'',evaluationId=state.selectedId;try{const data=await api(`/api/evaluations/${encodeURIComponent(evaluationId)}/log?offset=${offset}&limit=500&q=${encodeURIComponent(q)}`);if(state.tab!=='log'||state.selectedId!==evaluationId)return;const meta=$('logMeta'),view=$('logView'),prev=$('prevLog'),next=$('nextLog');if(!meta||!view||!prev||!next)return;meta.textContent=`显示 ${data.offset+1}-${Math.min(data.offset+data.lines.length,data.total)} / ${data.total} 行`;view.textContent=data.lines.join('\n');prev.disabled=data.offset===0;next.disabled=data.offset+data.lines.length>=data.total;prev.dataset.offset=Math.max(0,data.offset-500);next.dataset.offset=data.offset+500;}catch(e){if(state.tab==='log'&&state.selectedId===evaluationId)toast(e.message,true);}}
-    function renderLog(){if(!state.detail.analysis){$('tabView').innerHTML='<div class="empty">本地日志尚不可用</div>';return;}$('tabView').innerHTML='<div class="log-controls"><input id="logQuery" type="search" placeholder="过滤当前日志正文"><button id="searchLog">搜索</button><button id="prevLog">上一页</button><button id="nextLog">下一页</button><button id="downloadLog" class="download-log" title="将当前评测的完整原始日志下载到浏览器所在设备"><span aria-hidden="true">↓</span> 下载完整日志</button></div><div id="logMeta" class="log-meta">正在读取</div><pre id="logView" class="log-view"></pre>';$('searchLog').onclick=()=>loadLog(0);$('logQuery').onkeydown=e=>{if(e.key==='Enter')loadLog(0)};$('prevLog').onclick=e=>loadLog(Number(e.currentTarget.dataset.offset));$('nextLog').onclick=e=>loadLog(Number(e.currentTarget.dataset.offset));$('downloadLog').onclick=()=>{const link=document.createElement('a');link.href=`/api/evaluations/${encodeURIComponent(state.selectedId)}/download-log`;link.download='';document.body.appendChild(link);link.click();link.remove()};loadLog();}
+    function renderLog(){if(!state.detail.analysis){$('tabView').innerHTML='<div class="empty">本地日志尚不可用</div>';return;}$('tabView').innerHTML='<div class="log-controls"><input id="logQuery" type="search" placeholder="过滤当前日志正文"><button id="searchLog">搜索</button><button id="prevLog">上一页</button><button id="nextLog">下一页</button></div><div id="logMeta" class="log-meta">正在读取</div><pre id="logView" class="log-view"></pre>';$('searchLog').onclick=()=>loadLog(0);$('logQuery').onkeydown=e=>{if(e.key==='Enter')loadLog(0)};$('prevLog').onclick=e=>loadLog(Number(e.currentTarget.dataset.offset));$('nextLog').onclick=e=>loadLog(Number(e.currentTarget.dataset.offset));loadLog();}
     async function renderCompare(){const choices=state.snapshot.evaluations.filter(x=>x.id!==state.selectedId&&(x.score!==null||x.log.available));$('tabView').innerHTML=`<div class="compare-controls"><select id="compareSelect"><option value="">选择另一条评测</option>${choices.map(x=>`<option value="${esc(x.id)}">${esc(x.name)} · ${num(x.score)}</option>`).join('')}</select></div><div id="compareBody" class="empty">选择评测后查看平台分数与本地自动分析差异</div>`;$('compareSelect').onchange=async e=>{if(!e.target.value)return;try{state.compare=await api(`/api/evaluations/${encodeURIComponent(e.target.value)}`);renderComparison();}catch(err){toast(err.message,true)}};}
     function comparisonAnalysis(run,key){const analysis=run?.analysis||{},fromMap=analysis.automatic_metrics?.[key];if(fromMap)return fromMap;return (analysis.tasks||[]).find(task=>task.key===key)?.automatic_metrics||{};}
     function automaticComparisonRows(a,b){const rows=[],add=(label,left,right,kind='rate')=>{if(left!=null||right!=null)rows.push({label,left,right,kind})};
@@ -469,12 +525,14 @@
     function rankingAutoChips(row){const chips=[],think=rankingValue(row,'rec_think_copy'),noThink=rankingValue(row,'rec_no_think_copy'),overlap=rankingValue(row,'rec_overlap'),hallucination=rankingValue(row,'action_hallucination'),repeat=rankingValue(row,'action_repeat'),sample=rankingValue(row,'sample_count');if(sample!=null)chips.push(`${Math.round(sample)} 展示样本`);if(think!=null)chips.push(`推荐 Think 抄答 ${pct(think)}`);if(noThink!=null)chips.push(`推荐 No-think 抄答 ${pct(noThink)}`);if(overlap!=null)chips.push(`两路 SID 重复 ${pct(overlap)}`);if(hallucination!=null)chips.push(`用户幻觉 ${pct(hallucination)}`);if(repeat!=null)chips.push(`用户重复 ${pct(repeat)}`);if(!chips.length)return row.log?.available?'<span class="muted">日志未生成分析摘要</span>':'<span class="muted">无本地日志</span>';return chips.map(label=>`<span class="metric-chip auto">${esc(label)}</span>`).join('');}
     async function renderRankings(){state.tab='rankings';$('tabView').innerHTML='<div class="empty">正在加载全局排行与本地分析摘要</div>';try{if(!state.rankings){const data=await api('/api/rankings');state.rankings=data.rows||[];}if(state.tab==='rankings')renderRankingTable();}catch(error){$('tabView').innerHTML=`<div class="empty">排行加载失败：${esc(error.message)}</div>`;}}
     function renderRankingTable(){const rows=state.rankings||[],def=rankingMetricDef(),key=def[0],asc=state.rankingAsc,scored=rows.map(row=>({...row,_rankValue:rankingValue(row,key)})).sort((left,right)=>{const a=Number(left._rankValue),b=Number(right._rankValue),af=Number.isFinite(a),bf=Number.isFinite(b);if(!af&&!bf)return String(left.name).localeCompare(String(right.name));if(!af)return 1;if(!bf)return -1;return (asc?a-b:b-a)||String(left.name).localeCompare(String(right.name));});$('tabView').innerHTML=`<div class="ranking-controls"><label class="eyebrow" for="rankingMetric">排序指标</label><select id="rankingMetric">${RANKING_METRICS.map(item=>`<option value="${esc(item[0])}" ${item[0]===key?'selected':''}>${esc(item[1])}</option>`).join('')}</select><button id="rankingDirection">${asc?'升序 ↑':'降序 ↓'}</button><span class="muted">${rows.length} 条评测 · 本地自动指标来自分析缓存，不是平台正式评分</span></div><div class="task-list ranking-table"><div class="task-head"><span>#</span><span>评测模型 / 日志</span><span>总分</span><span>懂物料</span><span>懂用户</span><span>懂推荐</span><span>常识</span><span>排序指标</span><span>本地自动分析</span><span>日志</span></div>${scored.map((row,index)=>{const rankClass=index===0?'rank-high':index===scored.length-1?'rank-low':'';return `<button class="task-row" data-rank-select="${esc(row.id)}"><span class="rank-number ${rankClass}">${index+1}</span><span class="rank-target"><strong>${esc(row.name)}</strong><span>${esc(row.model_name||row.id)} · ${date(row.created_at)}</span></span><span class="mono">${num(row.score,6)}</span><span class="mono">${num(row.groups?.r0,6)}</span><span class="mono">${num(row.groups?.r1,6)}</span><span class="mono">${num(row.groups?.r2,6)}</span><span class="mono">${num(row.groups?.r3,6)}</span><strong class="mono rank-focus">${rankingDisplay(key,row._rankValue)}</strong><span class="ranking-auto">${rankingAutoChips(row)}</span><span class="${row.log?.available?'log-badge':'muted'}">${row.log?.available?bytes(row.log.size_bytes):'无日志'}</span></button>`}).join('')}</div>`;$('rankingMetric').onchange=event=>{state.rankingMetric=event.target.value;state.rankingAsc=rankingMetricDef(state.rankingMetric)[3]==='asc';localStorage.setItem('eval-monitor-ranking-metric',state.rankingMetric);localStorage.setItem('eval-monitor-ranking-asc',state.rankingAsc?'1':'0');renderRankingTable();};$('rankingDirection').onclick=()=>{state.rankingAsc=!state.rankingAsc;localStorage.setItem('eval-monitor-ranking-asc',state.rankingAsc?'1':'0');renderRankingTable();};document.querySelectorAll('[data-rank-select]').forEach(button=>button.addEventListener('click',()=>{state.tab='overview';selectEval(button.dataset.rankSelect);}));}
-    function renderTools(){const runtime=state.snapshot.runtime||{},sync=state.snapshot.sync_state||{},selected=state.detail?.evaluation?.id||'EVALUATION_ID',root=runtime.output_dir||'<output-dir>',tool='python ~/.codex/skills/streamlake-experiment-analyst/scripts/streamlake_experiments.py',commands=[['probe','检查 Cookie、project ID 和平台 API 形态',`${tool} probe`],['sync','同步 2026-08-01 后的训练/评测元数据并补齐评测日志',`${tool} sync`],['status','查看本地仓库、错误数和日志覆盖状态',`${tool} status`],['list','列出本地已同步实验；可加 --type finetune 或 --type evaluation',`${tool} list --type evaluation`],['compare','按精确 ID 比较两条实验',`${tool} compare ID1 ID2 --baseline ID1 --primary-metric score`],['context','输出给 Codex/其他工具使用的上下文包',`${tool} context`],['download-log','下载指定评测完整日志',`${tool} download-log ${selected}`]];$('tabView').innerHTML=`<section class="band"><h3>统一工作台</h3><div class="kv-grid"><div class="kv"><span>评测日志页</span><strong>/</strong></div><div class="kv"><span>训练监控页</span><strong>${runtime.training_monitor?'<a href="/train/">/train/</a>':'训练配置缺失'}</strong></div><div class="kv"><span>数据目录</span><strong>${esc(root)}</strong></div><div class="kv"><span>最近同步</span><strong>${esc(sync.finished_at||sync.started_at||'--')}</strong></div></div></section><section class="band"><h3>Skill CLI 能力</h3><p class="auto-analysis-note" style="margin:0 0 10px">同步、对比和完整日志下载已经有网页入口；下面保留精确命令，适合排查、导出或给其他工具调用。</p><div class="task-list"><div class="task-head" style="min-width:900px;grid-template-columns:120px minmax(260px,1fr) minmax(360px,1.2fr)"><span>命令</span><span>用途</span><span>示例</span></div>${commands.map(([name,desc,cmd])=>`<div class="task-row" style="min-width:900px;grid-template-columns:120px minmax(260px,1fr) minmax(360px,1.2fr)"><strong class="mono">${esc(name)}</strong><span>${esc(desc)}</span><code class="mono">${esc(cmd)}</code></div>`).join('')}</div></section><section class="band"><h3>本地输出</h3><div class="kv-grid"><div class="kv"><span>SQLite</span><strong>${esc(root)}/experiments.sqlite</strong></div><div class="kv"><span>CSV 导出</span><strong>${esc(root)}/exports/</strong></div><div class="kv"><span>实验目录</span><strong>${esc(root)}/catalog.md</strong></div><div class="kv"><span>上下文包</span><strong>${esc(root)}/context.md</strong></div><div class="kv"><span>完整评测日志</span><strong>${esc(root)}/logs/&lt;evalTaskId&gt;/evaluation.log</strong></div><div class="kv"><span>分析缓存</span><strong>${esc(root)}/analysis_cache/</strong></div></div></section>`;}
+    function renderTools(){const runtime=state.snapshot.runtime||{},sync=state.snapshot.sync_state||{},selected=state.detail?.evaluation?.id||'EVALUATION_ID',root=runtime.output_dir||'<output-dir>',tool='python ~/.codex/skills/streamlake-experiment-analyst/scripts/streamlake_experiments.py',commands=[['probe','检查 Cookie、project ID 和平台 API 形态',`${tool} probe`],['sync','同步 2026-08-01 后的训练/评测元数据并补齐评测日志',`${tool} sync`],['status','查看本地仓库、错误数和日志覆盖状态',`${tool} status`],['list','列出本地已同步实验；可加 --type finetune 或 --type evaluation',`${tool} list --type evaluation`],['compare','按精确 ID 比较两条实验',`${tool} compare ID1 ID2 --baseline ID1 --primary-metric score`],['context','输出给 Codex/其他工具使用的上下文包',`${tool} context`],['download-log','下载指定评测完整日志',`${tool} download-log ${selected}`]];$('tabView').innerHTML=`<section class="band"><h3>统一工作台</h3><div class="kv-grid"><div class="kv"><span>训练监控页</span><strong>${runtime.training_monitor?'<a href="/">/</a>':'训练配置缺失'}</strong></div><div class="kv"><span>评测日志页</span><strong><a href="/eval/">/eval/</a></strong></div><div class="kv"><span>数据目录</span><strong>${esc(root)}</strong></div><div class="kv"><span>最近同步</span><strong>${esc(sync.finished_at||sync.started_at||'--')}</strong></div></div></section><section class="band"><h3>Skill CLI 能力</h3><p class="auto-analysis-note" style="margin:0 0 10px">同步、对比和完整日志下载已经有网页入口；下面保留精确命令，适合排查、导出或给其他工具调用。</p><div class="task-list"><div class="task-head" style="min-width:900px;grid-template-columns:120px minmax(260px,1fr) minmax(360px,1.2fr)"><span>命令</span><span>用途</span><span>示例</span></div>${commands.map(([name,desc,cmd])=>`<div class="task-row" style="min-width:900px;grid-template-columns:120px minmax(260px,1fr) minmax(360px,1.2fr)"><strong class="mono">${esc(name)}</strong><span>${esc(desc)}</span><code class="mono">${esc(cmd)}</code></div>`).join('')}</div></section><section class="band"><h3>本地输出</h3><div class="kv-grid"><div class="kv"><span>SQLite</span><strong>${esc(root)}/experiments.sqlite</strong></div><div class="kv"><span>CSV 导出</span><strong>${esc(root)}/exports/</strong></div><div class="kv"><span>实验目录</span><strong>${esc(root)}/catalog.md</strong></div><div class="kv"><span>上下文包</span><strong>${esc(root)}/context.md</strong></div><div class="kv"><span>完整评测日志</span><strong>${esc(root)}/logs/&lt;evalTaskId&gt;/evaluation.log</strong></div><div class="kv"><span>分析缓存</span><strong>${esc(root)}/analysis_cache/</strong></div></div></section>`;}
     function updateSyncButton(){const running=state.snapshot.sync.running,configured=state.snapshot.config.configured;$('syncBtn').disabled=running||!configured;$('syncText').textContent=running?'同步中':'同步';$('syncIcon').className=`sync-icon${running?' spinning':''}`;}
     function renderConfigState(){if(!state.snapshot)return;const c=state.snapshot.config;$('configState').innerHTML=c.configured?`<strong style="color:var(--green)">已配置</strong><br><span class="muted">Project ID: <span class="mono">${esc(c.project_id)}</span> · Cookie 已安全保存，更新于 ${date(c.cookie_updated_at)}</span>`:'<strong style="color:var(--amber)">尚未配置</strong><br><span class="muted">首次同步前请粘贴平台请求头。</span>';}
     $('evalSearch').addEventListener('input',()=>state.snapshot&&renderEvalList());
     document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;renderTab()}));
     $('settingsBtn').onclick=()=>{$('headersInput').value='';renderConfigState();$('configDialog').showModal()};$('closeConfig').onclick=$('cancelConfig').onclick=()=>$('configDialog').close();
+    $('closeTrainingBinding').onclick=$('cancelTrainingBinding').onclick=()=>$('trainingBindingDialog').close();$('saveTrainingBinding').onclick=saveTrainingBinding;
+    $('uploadBtn').onclick=openManualUpload;$('closeManualUpload').onclick=$('cancelManualUpload').onclick=()=>$('manualUploadDialog').close();$('submitManualUpload').onclick=submitManualUpload;
     $('saveConfig').onclick=async()=>{const headers=$('headersInput').value;if(!headers.trim()){toast('请先粘贴完整请求头',true);return;}$('saveConfig').disabled=true;try{await api('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Eval-Monitor-Token':state.token},body:JSON.stringify({headers})});$('headersInput').value='';$('configDialog').close();toast('配置已保存，可以开始同步');await loadSnapshot(true);}catch(e){toast(e.message,true)}finally{$('saveConfig').disabled=false}};
     $('syncBtn').onclick=async()=>{try{await api('/api/sync',{method:'POST',headers:{'X-Eval-Monitor-Token':state.token}});toast('同步已启动，将更新评测列表和完整日志');await loadSnapshot(true);}catch(e){toast(e.message,true)}};
     loadSnapshot();

@@ -25,9 +25,10 @@ if ($sshProcess.HasExited) {
     throw "SSH tunnel exited before it became ready. Check the SSH target and authentication."
 }
 
-$url = "http://127.0.0.1:${LocalPort}"
+$url = "http://127.0.0.1:${LocalPort}/"
 Start-Process $url
-Write-Host "Evaluation monitor opened at $url"
+Write-Host "Training monitor opened at $url"
+Write-Host "Evaluation monitor: http://127.0.0.1:${LocalPort}/eval/"
 Write-Host "Keep this PowerShell window open. Press Ctrl+C to close the tunnel."
 
 try { Wait-Process -Id $sshProcess.Id }

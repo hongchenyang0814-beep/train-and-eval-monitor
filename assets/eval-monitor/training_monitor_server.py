@@ -15,10 +15,12 @@ import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 
 HERE = Path(__file__).resolve().parent
@@ -65,6 +67,13 @@ SUBGROUP_LABELS = {
 }
 MANIFEST_MAX_BYTES = 256 * 1024
 MANIFEST_TEXT_LIMIT = 4000
+MANIFEST_DOC_MAX_BYTES = 32 * 1024
+MANIFEST_REQUIRED_FIELDS = (
+    "schema_version", "run_id", "title", "purpose", "hypothesis", "changes",
+    "dataset", "model", "config_file", "expected_result", "notes", "created_at",
+)
+HF_OWNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,38}")
+HF_REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
 
 
 class UploadConflictError(ValueError):
@@ -82,9 +91,167 @@ def load_config(path: Path) -> dict[str, Any]:
     config["refresh_seconds"] = max(10, int(config.get("refresh_seconds", 30)))
     config["stale_after_seconds"] = max(60, int(config.get("stale_after_seconds", 600)))
     config["max_scan_depth"] = max(1, min(6, int(config.get("max_scan_depth", 3))))
-    config.setdefault("outputs_roots", ["/root/output"])
+    config.setdefault("outputs_roots", [str(Path.home() / "output")])
     config.setdefault("targets", [])
+    config["_config_path"] = str(path.resolve())
+    token_path = config.get("huggingface_token_file") or (path.parent / "config" / "huggingface_token")
+    config["huggingface_token_file"] = str(Path(token_path).expanduser().resolve())
+    config.setdefault("_monitor_token", secrets.token_urlsafe(32))
     return config
+
+
+def _atomic_write(path: Path, content: str, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _persist_config(config: dict[str, Any]) -> None:
+    path = Path(str(config["_config_path"])).resolve()
+    persisted = {key: value for key, value in config.items() if not key.startswith("_")}
+    _atomic_write(path, json.dumps(persisted, ensure_ascii=False, indent=2) + "\n")
+
+
+def huggingface_token(config: dict[str, Any]) -> str:
+    path = Path(str(config["huggingface_token_file"])).resolve()
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise ValueError("尚未绑定 Hugging Face Token，请先在训练设置中保存绑定") from exc
+    except OSError as exc:
+        raise ValueError("无法读取 Hugging Face Token 文件") from exc
+    if not token:
+        raise ValueError("Hugging Face Token 为空，请重新绑定")
+    return token
+
+
+def huggingface_status(config: dict[str, Any]) -> dict[str, Any]:
+    profiles = upload_profiles(config)
+    configured_profiles = {
+        category: profile
+        for category, profile in profiles.items()
+        if profile.get("hub_owner") and profile.get("hub_repo_prefix") and profile.get("base_model_id")
+    }
+    binding = next(iter(configured_profiles.values()), {})
+    token_path = Path(str(config["huggingface_token_file"])).resolve()
+    token_configured = token_path.is_file() and token_path.stat().st_size > 0
+    permission = huggingface_permission_status(config, binding, token_configured)
+    upload_config = config.get("auto_upload")
+    config_file = str(upload_config.get("config_file", "training_config.yaml")) if isinstance(upload_config, dict) else "training_config.yaml"
+    values = {
+        "endpoint": str(binding.get("hub_endpoint", "https://huggingface.co")),
+        "owner": str(binding.get("hub_owner", "")),
+        "repo_prefix": str(binding.get("hub_repo_prefix", "")),
+        "private_repo": bool(binding.get("hub_private_repo", True)),
+        "index_repo_id": str(binding.get("hub_index_repo_id", "")),
+        "base_model_id": str(binding.get("base_model_id", "")),
+        "group_id": "",
+        "config_file": config_file,
+    }
+    upload_configured = bool(configured_profiles)
+    configured = token_configured
+    updated_at = None
+    if token_configured:
+        try:
+            updated_at = token_path.stat().st_mtime
+        except OSError:
+            updated_at = None
+    return {
+        "configured": configured,
+        "token_configured": token_configured,
+        "upload_configured": upload_configured,
+        "upload_ready": bool(token_configured and upload_configured),
+        "upload_profile_count": len(configured_profiles),
+        "permission": permission,
+        "token_updated_at": updated_at,
+        **values,
+    }
+
+
+def huggingface_permission_status(config: dict[str, Any], binding: dict[str, Any], token_configured: bool) -> dict[str, Any]:
+    if not token_configured:
+        return {"state": "unbound", "checked_at": None}
+    token_mtime = Path(str(config["huggingface_token_file"])).stat().st_mtime
+    verified_mtime = config.get("huggingface_write_verified_token_mtime")
+    if isinstance(verified_mtime, (int, float)) and abs(token_mtime - float(verified_mtime)) < 0.001:
+        return {"state": "write", "checked_at": float(verified_mtime)}
+    cached = config.get("_hf_permission_cache")
+    now = time.time()
+    if isinstance(cached, dict) and now - float(cached.get("checked_at", 0) or 0) < 300:
+        return cached
+    try:
+        token = huggingface_token(config)
+        endpoint = str(binding.get("hub_endpoint") or "https://huggingface.co").rstrip("/")
+        request = Request(f"{endpoint}/api/whoami-v2", headers={"Authorization": f"Bearer {token}"})
+        with urlopen(request, timeout=5) as response:  # nosec B310 - endpoint is local runtime config
+            payload = json.loads(response.read().decode("utf-8"))
+        role = str(payload.get("auth", {}).get("accessToken", {}).get("role", "")).lower()
+        state = "write" if role == "write" else "read_only" if role == "read" else "fine_grained" if role in {"finegrained", "fine-grained"} else "unknown"
+    except Exception:
+        state = "unavailable"
+    result = {"state": state, "checked_at": now}
+    config["_hf_permission_cache"] = result
+    return result
+
+
+def validate_huggingface_write_access(config: dict[str, Any], token: str) -> None:
+    """Verify real Hub and LFS write access with a private disposable repository."""
+    profiles = upload_profiles(config)
+    binding = next((profile for profile in profiles.values() if profile.get("hub_owner")), None)
+    if not isinstance(binding, dict):
+        raise ValueError("请先在训练配置中设置至少一个 Hugging Face 分类 profile")
+    owner = str(binding.get("hub_owner", "")).strip()
+    endpoint = str(binding.get("hub_endpoint") or "https://huggingface.co")
+    if not owner:
+        raise ValueError("Hugging Face profile 缺少目标命名空间")
+    try:
+        from huggingface_hub import HfApi
+    except ImportError as exc:
+        raise ValueError("当前环境未安装 huggingface_hub，无法验证写入权限") from exc
+    probe_repo = f"{owner}/eval-monitor-write-check-{secrets.token_hex(6)}"
+    api = HfApi(endpoint=endpoint, token=token)
+    created = False
+    try:
+        api.create_repo(repo_id=probe_repo, repo_type="model", private=True, exist_ok=False)
+        created = True
+        with tempfile.NamedTemporaryFile(prefix="hf-write-check-", suffix=".bin") as handle:
+            handle.truncate(11 * 1024 * 1024)  # Force the same LFS path used by checkpoints.
+            handle.flush()
+            api.upload_file(path_or_fileobj=handle.name, path_in_repo=".eval-monitor-write-check.bin", repo_id=probe_repo, repo_type="model")
+    except Exception as exc:
+        raise ValueError("Hugging Face Token 没有目标命名空间的 Write/LFS 写入权限，请重新创建或授权 Token") from exc
+    finally:
+        if created:
+            try:
+                api.delete_repo(repo_id=probe_repo, repo_type="model")
+            except Exception:
+                pass
+
+
+def save_huggingface_binding(config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    allowed = {"token"}
+    if set(payload) - allowed:
+        raise ValueError("包含不支持的 Hugging Face 配置字段")
+    token = str(payload.get("token", "")).strip()
+    if not token:
+        try:
+            token = huggingface_token(config)
+        except ValueError:
+            raise ValueError("首次绑定必须填写 Hugging Face Token")
+    validate_huggingface_write_access(config, token)
+    token_path = Path(str(config["huggingface_token_file"])).resolve()
+    _atomic_write(token_path, token + "\n")
+    config["huggingface_write_verified_token_mtime"] = token_path.stat().st_mtime
+    config["_hf_permission_cache"] = {"state": "write", "checked_at": time.time()}
+    _persist_config(config)
+    return huggingface_status(config)
 
 
 def stable_id(path: Path) -> str:
@@ -128,23 +295,77 @@ def experiment_subgroup(output_dir: Path, output_roots: list[str]) -> dict[str, 
 
 
 def apply_automatic_upload_config(target: dict[str, Any], config: dict[str, Any]) -> None:
-    defaults = config.get("auto_upload")
-    if not isinstance(defaults, dict) or target.get("enable_upload") is False:
+    if target.get("enable_upload") is False:
         return
-    if (target.get("group") or {}).get("id") != defaults.get("group_id"):
+    layout = automatic_upload_layout(target, config)
+    if layout is None:
         return
-    config_file = str(defaults.get("config_file", "training_config.yaml"))
-    if Path(config_file).name != config_file:
+    _category, run_id, config_path, profile = layout
+    existing_config_path = str(target.get("config_path", "")).strip()
+    if existing_config_path and Path(existing_config_path).expanduser().resolve() != config_path:
         return
-    config_path = Path(target["output_dir"]).resolve() / config_file
-    if not config_path.is_file():
+    existing_run_id = str(target.get("run_id", "")).strip()
+    if existing_run_id and existing_run_id != run_id:
         return
     for field in ("hub_endpoint", "hub_owner", "hub_repo_prefix", "hub_private_repo", "hub_index_repo_id", "base_model_id"):
-        if target.get(field) in (None, "") and defaults.get(field) not in (None, ""):
-            target[field] = defaults[field]
-    target.setdefault("config_path", str(config_path))
-    target.setdefault("run_id", Path(target["output_dir"]).name)
-    target.setdefault("enable_upload", True)
+        if target.get(field) in (None, "") and profile.get(field) not in (None, ""):
+            target[field] = profile[field]
+    target["config_path"] = str(config_path)
+    target["run_id"] = run_id
+    target["enable_upload"] = True
+
+
+def upload_profiles(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    defaults = config.get("auto_upload")
+    if not isinstance(defaults, dict):
+        return {}
+    profiles = defaults.get("profiles")
+    if isinstance(profiles, dict):
+        return {
+            str(category).strip("/"): value
+            for category, value in profiles.items()
+            if isinstance(value, dict) and str(category).strip("/")
+        }
+    # Keep existing single-group configs working while users move to profiles.
+    group_id = str(defaults.get("group_id", "")).strip("/")
+    return {group_id: defaults} if group_id else {}
+
+
+def automatic_upload_layout(target: dict[str, Any], config: dict[str, Any]) -> tuple[str, str, Path, dict[str, Any]] | None:
+    """Accept <root>/<category>/<run> and <root>/<category>/<subcategory>/<run>."""
+    defaults = config.get("auto_upload")
+    if not isinstance(defaults, dict):
+        return None
+    if str(defaults.get("config_file", "")).strip() != "training_config.yaml":
+        return None
+    output_dir = Path(str(target["output_dir"])).expanduser().resolve()
+    for root_value in config["outputs_roots"]:
+        root = Path(root_value).expanduser().resolve()
+        try:
+            relative = output_dir.relative_to(root)
+        except ValueError:
+            continue
+        if len(relative.parts) not in (2, 3):
+            continue
+        category = "/".join(relative.parts[:-1])
+        profile = upload_profiles(config).get(category)
+        if not profile or profile.get("enabled") is False:
+            continue
+        run_id = relative.parts[-1]
+        if not RUN_ID_RE.fullmatch(run_id):
+            return None
+        config_path = output_dir / "training_config.yaml"
+        metrics_path = output_dir / "trainer_log.jsonl"
+        if not config_path.is_file() or not metrics_path.is_file():
+            return None
+        existing_config_path = str(target.get("config_path", "")).strip()
+        if existing_config_path and Path(existing_config_path).expanduser().resolve() != config_path:
+            return None
+        existing_run_id = str(target.get("run_id", "")).strip()
+        if existing_run_id and existing_run_id != run_id:
+            return None
+        return category, run_id, config_path, profile
+    return None
 
 
 def discover_subgroups(config: dict[str, Any]) -> list[dict[str, str]]:
@@ -253,6 +474,18 @@ def manifest_text(value: Any, limit: int = MANIFEST_TEXT_LIMIT) -> str:
     return str(value).strip()[:limit]
 
 
+def parse_timestamp(value: Any) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed.timestamp()
+
+
 def read_run_manifest(output_dir: Path) -> dict[str, Any]:
     manifest_path = output_dir / "run_manifest.json"
     try:
@@ -291,10 +524,28 @@ def read_run_manifest(output_dir: Path) -> dict[str, Any]:
         config_path = (output_dir / config_file).resolve()
         config_available = config_path.parent == output_dir.resolve() and config_path.is_file()
 
+    missing_fields = [
+        field for field in MANIFEST_REQUIRED_FIELDS
+        if field not in raw or raw.get(field) in (None, "", [], {})
+    ]
+    documentation = {"available": False, "filename": "training_task.md", "text": ""}
+    documentation_path = output_dir / "training_task.md"
+    try:
+        if documentation_path.stat().st_size <= MANIFEST_DOC_MAX_BYTES:
+            documentation = {
+                "available": True,
+                "filename": documentation_path.name,
+                "text": documentation_path.read_text(encoding="utf-8"),
+            }
+    except (FileNotFoundError, OSError, UnicodeError):
+        pass
+
     return {
         "available": True,
         "error": None,
         "schema_version": 1,
+        "valid": not missing_fields and config_available,
+        "missing_fields": missing_fields,
         "run_id": manifest_text(raw.get("run_id"), 100),
         "category": manifest_text(raw.get("category"), 100),
         "title": manifest_text(raw.get("title"), 300),
@@ -316,7 +567,47 @@ def read_run_manifest(output_dir: Path) -> dict[str, Any]:
         "expected_result": manifest_text(raw.get("expected_result")),
         "notes": manifest_text(raw.get("notes")),
         "created_at": manifest_text(raw.get("created_at"), 100),
+        "status": manifest_text(raw.get("status"), 50),
+        "started_at": manifest_text(raw.get("started_at"), 100),
+        "finished_at": manifest_text(raw.get("finished_at"), 100),
+        "documentation": documentation,
     }
+
+
+def read_train_runtime(output_dir: Path) -> float | None:
+    for filename in ("train_results.json", "all_results.json", "trainer_state.json"):
+        path = output_dir / filename
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        value = raw.get("train_runtime")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
+            return float(value)
+        history = raw.get("log_history")
+        if isinstance(history, list):
+            for item in reversed(history):
+                if not isinstance(item, dict):
+                    continue
+                value = item.get("train_runtime")
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
+                    return float(value)
+    return None
+
+
+def run_duration(output_dir: Path, manifest: dict[str, Any], now: float) -> tuple[float | None, str | None]:
+    started_at = parse_timestamp(manifest.get("started_at"))
+    finished_at = parse_timestamp(manifest.get("finished_at"))
+    if started_at is not None:
+        end = finished_at if finished_at is not None else now
+        if end >= started_at:
+            return end - started_at, "manifest"
+    runtime = read_train_runtime(output_dir)
+    if runtime is not None:
+        return runtime, "trainer"
+    return None, None
 
 
 def step_value(record: dict[str, Any]) -> float | None:
@@ -417,6 +708,59 @@ def evaluation_repo_id(target: dict[str, Any], run_id: str, step: int) -> str:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,70}", prefix):
         raise ValueError("hub_repo_prefix must be a valid Hugging Face repository prefix")
     return f"{owner}/{prefix}-{run_id}-step-{step:05d}"
+
+
+def remote_model_repositories(config: dict[str, Any], endpoint: str, owner: str) -> set[str]:
+    cache = config.setdefault("_hf_repo_cache", {})
+    cache_key = f"{endpoint.rstrip('/')}/{owner}"
+    cached = cache.get(cache_key) if isinstance(cache, dict) else None
+    now = time.time()
+    if isinstance(cached, dict) and now - float(cached.get("checked_at", 0) or 0) < 300:
+        return set(cached.get("repo_ids", []))
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(endpoint=endpoint, token=huggingface_token(config))
+        repo_ids = {str(item.id) for item in api.list_models(author=owner, limit=1000) if getattr(item, "id", None)}
+    except Exception:
+        repo_ids = set()
+    if isinstance(cache, dict):
+        cache[cache_key] = {"checked_at": now, "repo_ids": sorted(repo_ids)}
+    return repo_ids
+
+
+def remote_repository_has_adapter(config: dict[str, Any], endpoint: str, repo_id: str) -> bool:
+    cache = config.setdefault("_hf_repo_file_cache", {})
+    cached = cache.get(repo_id) if isinstance(cache, dict) else None
+    now = time.time()
+    if isinstance(cached, dict) and now - float(cached.get("checked_at", 0) or 0) < 300:
+        return bool(cached.get("has_adapter"))
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(endpoint=endpoint, token=huggingface_token(config))
+        has_adapter = bool(api.file_exists(repo_id=repo_id, filename="adapter_model.safetensors", repo_type="model"))
+    except Exception:
+        has_adapter = False
+    if isinstance(cache, dict):
+        cache[repo_id] = {"checked_at": now, "has_adapter": has_adapter}
+    return has_adapter
+
+
+def remote_uploads_for_checkpoints(target: dict[str, Any], checkpoints: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if not target.get("enable_upload") or not target.get("hub_owner") or not target.get("hub_repo_prefix"):
+        return {}
+    try:
+        owner = str(target["hub_owner"])
+        endpoint = str(target.get("hub_endpoint") or "https://huggingface.co")
+        repo_ids = remote_model_repositories(config, endpoint, owner)
+        run_id = str(target.get("run_id") or Path(str(target["output_dir"])).name)
+        result = {}
+        for checkpoint in checkpoints:
+            repo_id = evaluation_repo_id(target, run_id, int(checkpoint["step"]))
+            if repo_id in repo_ids and remote_repository_has_adapter(config, endpoint, repo_id):
+                result[str(checkpoint["name"])] = {"repo_id": repo_id, "repo_url": f"https://huggingface.co/{repo_id}", "source": "hub_existing", "step": checkpoint["step"]}
+        return result
+    except (TypeError, ValueError):
+        return {}
 
 
 def render_evaluation_index(entries: list[dict[str, Any]]) -> str:
@@ -541,20 +885,26 @@ def build_experiment(target: dict[str, Any], config: dict[str, Any], now: float)
         metrics_bytes = 0
         age_seconds = None
     process_alive = pid_is_alive(target.get("pid"))
+    manifest = read_run_manifest(output_dir)
+    duration_seconds, duration_source = run_duration(output_dir, manifest, now)
     log_path = Path(target["log_path"]) if target.get("log_path") else output_dir / "train.log"
     log_lines = tail_text(log_path)
     errors = [line for line in log_lines if ERROR_RE.search(line)][-10:]
-    uploads = config.get("_upload_registry", {}).get("uploads", {}).get(target["id"], {})
-    if not isinstance(uploads, dict):
-        uploads = {}
+    local_uploads = config.get("_upload_registry", {}).get("uploads", {}).get(target["id"], {})
+    if not isinstance(local_uploads, dict):
+        local_uploads = {}
     upload_enabled = bool(
-        target.get("enable_upload")
+        automatic_upload_layout(target, config)
+        and target.get("enable_upload")
         and target.get("hub_endpoint")
         and target.get("hub_owner")
         and target.get("hub_repo_prefix")
         and target.get("base_model_id")
         and target.get("config_path")
     )
+    checkpoints = checkpoint_list(output_dir)
+    uploads = remote_uploads_for_checkpoints(target, checkpoints, config) if upload_enabled else {}
+    uploads.update(local_uploads)
     return {
         "id": target["id"],
         "label": target["label"],
@@ -580,8 +930,10 @@ def build_experiment(target: dict[str, Any], config: dict[str, Any], now: float)
         "modified_at": modified_at,
         "metrics_bytes": metrics_bytes,
         "age_seconds": age_seconds,
-        "run_manifest": read_run_manifest(output_dir),
-        "checkpoints": checkpoint_list(output_dir),
+        "duration_seconds": duration_seconds,
+        "duration_source": duration_source,
+        "run_manifest": manifest,
+        "checkpoints": checkpoints,
         "uploads": uploads,
         "log_tail": log_lines[-30:],
         "errors": errors,
@@ -644,7 +996,10 @@ def build_snapshot(config: dict[str, Any]) -> dict[str, Any]:
         "generated_at": now,
         "refresh_seconds": config["refresh_seconds"],
         "upload_nonce": config.get("_upload_nonce"),
+        "monitor_token": config.get("_monitor_token"),
+        "huggingface": huggingface_status(config),
         "stale_after_seconds": config["stale_after_seconds"],
+        "config_file": config.get("_monitor_config_file", ""),
         "server": {"hostname": os.uname().nodename, "outputs_roots": config["outputs_roots"]},
         "gpu": gpu_snapshot(),
         "experiments": experiments,
@@ -750,6 +1105,7 @@ class MonitorServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], config: dict[str, Any]):
         self.config = config
         self.upload_lock = threading.Lock()
+        self.config.setdefault("_monitor_token", secrets.token_urlsafe(32))
         self.upload_registry_path = UPLOAD_REGISTRY_PATH
         self.config["_upload_registry"] = load_upload_registry(self.upload_registry_path)
         self.config["_upload_nonce"] = secrets.token_urlsafe(24)
@@ -821,6 +1177,8 @@ class MonitorHandler(BaseHTTPRequestHandler):
             raise ValueError("selected experiment is not available")
         if not target.get("enable_upload"):
             raise ValueError("upload is disabled for this experiment")
+        if automatic_upload_layout(target, self.server.config) is None:  # type: ignore[attr-defined]
+            raise ValueError("upload requires <output-root>/<category>/<run-id>/training_config.yaml or one nested subcategory")
         existing = self.server.config.get("_upload_registry", {}).get("uploads", {}).get(experiment_id, {}).get(checkpoint_name)  # type: ignore[attr-defined]
         if isinstance(existing, dict):
             raise UploadConflictError(f"checkpoint was already uploaded: {existing.get('repo_url', existing.get('repo_id'))}")
@@ -854,7 +1212,7 @@ class MonitorHandler(BaseHTTPRequestHandler):
                 from huggingface_hub import HfApi
             except ImportError as exc:
                 raise RuntimeError("huggingface_hub is not installed in the monitor environment") from exc
-            api = HfApi(endpoint=str(target["hub_endpoint"]))
+            api = HfApi(endpoint=str(target["hub_endpoint"]), token=huggingface_token(self.server.config))
             api.create_repo(
                 repo_id=repo_id,
                 repo_type="model",
@@ -973,6 +1331,18 @@ class MonitorHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path == "/api/huggingface":
+            expected = self.server.config.get("_monitor_token", "")  # type: ignore[attr-defined]
+            if not isinstance(expected, str) or not secrets.compare_digest(self.headers.get("X-Eval-Monitor-Token", ""), expected):
+                self._send_json(403, {"error": "页面令牌无效，请刷新后重试"})
+                return
+            try:
+                payload = self._read_json_body()
+                status = save_huggingface_binding(self.server.config, payload)  # type: ignore[attr-defined]
+                self._send_json(200, {"status": "saved", "huggingface": status})
+            except ValueError as exc:
+                self._send_json(400, {"error": str(exc)})
+            return
         if path != "/api/upload":
             self._send_json(404, {"error": "not found"})
             return
