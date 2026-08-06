@@ -49,6 +49,8 @@ Tell the user to run the tunnel command on the computer where their browser runs
 
 Open the settings dialog to paste complete StreamLake request headers. The app extracts and persists the Cookie and project ID without echoing the Cookie. Use the Sync button to update metadata and complete logs. After each successful sync, the Monitor analyzes only new or changed logs in the background and persists full parsed results under `<output-dir>/analysis_cache`; page loads do not start batch analysis or show cache progress, and later page loads and service restarts reuse valid caches. Opening an uncached evaluation may analyze and persist that one log on demand. Re-run `deploy` after the skill is upgraded; never package credentials, generated caches, PID files, service logs, or screenshots.
 
+Task binding in the Monitor falls back to task-family prefixes, so unfamiliar `challenge_itemic_*`, `challenge_evolution_*`, `challenge_recommendation_*`, and `challenge_common_sense` aliases still land in the right family instead of collapsing into “other”.
+
 In the Log tab, use **Download Complete Log** to stream the selected evaluation's full original log to the browser device. The route accepts only synchronized evaluation IDs and imposes no file-size limit; the browser controls the final local download path.
 
 When handing off a deployment, report both the server lifecycle command and the local tunnel/browser command. If the SSH host, user, or port is unknown, leave explicit placeholders and ask the user to substitute their normal SSH connection values; do not embed a personal SSH alias.

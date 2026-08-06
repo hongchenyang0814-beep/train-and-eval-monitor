@@ -24,7 +24,13 @@ TASK_CATALOG = [
 ]
 
 TASK_INFO = {key: {"group": group, "label": label} for key, group, label in TASK_CATALOG}
-PARSER_VERSION = 4
+PARSER_VERSION = 5
+
+TASK_PREFIX_FALLBACKS = (
+    ("challenge_itemic_", "懂物料"),
+    ("challenge_evolution_", "懂用户"),
+    ("challenge_recommendation_", "懂推荐"),
+)
 
 ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 RICH_TAG_RE = re.compile(
@@ -54,8 +60,20 @@ def clean_line(line: str) -> str:
     return line.strip()
 
 
+def _infer_task_info(key: str) -> dict[str, str]:
+    info = TASK_INFO.get(key)
+    if info is not None:
+        return info
+    if key == "challenge_common_sense":
+        return {"group": "常识", "label": "通用常识"}
+    for prefix, group in TASK_PREFIX_FALLBACKS:
+        if key.startswith(prefix):
+            return {"group": group, "label": key}
+    return {"group": "其他", "label": key}
+
+
 def _new_task(key: str) -> dict[str, Any]:
-    info = TASK_INFO.get(key, {"group": "其他", "label": key})
+    info = _infer_task_info(key)
     return {
         "key": key,
         "group": info["group"],
@@ -476,7 +494,7 @@ def _render_analysis_appendix(parsed: dict[str, Any], score: dict[str, Any] | No
     task_scores = score.get("tasks") or {}
     for task in parsed.get("tasks", []):
         key = task.get("key", "")
-        info = TASK_INFO.get(key, {"label": task.get("label", key)})
+        info = _infer_task_info(key)
         manual = task_scores.get(key)
         auto = (parsed.get("automatic_metrics") or {}).get(key, {})
         lines.append(f"任务: {info['label']} ({key})")

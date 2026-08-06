@@ -191,6 +191,24 @@ Updated sample metrics to:
         self.assertEqual(task["status"], "已完成")
         self.assertEqual(task["metrics"], {})
 
+    def test_unknown_itemic_tasks_fall_back_to_the_material_family(self):
+        text = """
+[2026-08-05 00:00:00,000] [INFO] tasks      : ['challenge_itemic_topk_video']
+Task [1/1]: challenge_itemic_topk_video | Split: test | Sample Size: N/A
+[green]Loaded 5 samples for challenge_itemic_topk_video[/green]
+Using SomeEvaluator for challenge_itemic_topk_video
+Updated sample metrics to:
+/output/merged/challenge_itemic_topk_video/test_generated.json
+"""
+
+        parsed = parser_module.parse_log(text, "evaluation.log", len(text.encode("utf-8")))
+        task = next(item for item in parsed["tasks"] if item["key"] == "challenge_itemic_topk_video")
+
+        self.assertEqual(task["group"], "懂物料")
+        self.assertEqual(task["label"], "challenge_itemic_topk_video")
+        self.assertEqual(task["sample_count"], 5)
+        self.assertEqual(task["status"], "已完成")
+
     def test_dashboard_explains_missing_task_summary_metrics(self):
         dashboard = (ROOT / "assets" / "eval-monitor" / "dashboard.html").read_text(encoding="utf-8")
         self.assertIn("未提供任务级指标", dashboard)

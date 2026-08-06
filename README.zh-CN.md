@@ -18,7 +18,7 @@
 - 比较指标差值、缺失指标和训练参数差异。
 - 脱敏 Cookie/JWT/签名 URL，排除二进制与大文本内容。
 - 只允许 StreamLake 官方域名上的只读查询端点。
-- 一条命令部署本地评测日志 Monitor，支持平台配置、同步、11 个子任务、Think/No-think 样本、多输出切换、日志分页和评测对比。
+- 一条命令部署本地评测日志 Monitor，支持平台配置、同步、11 个子任务、Think/No-think 样本、多输出切换、日志分页和评测对比；即使日志里出现未收录的 `challenge_itemic_*`、`challenge_evolution_*`、`challenge_recommendation_*` 或 `challenge_common_sense` 变体，也会按家族兜底归类。
 - 每次同步成功后只在后台分析新增或变化的日志，完整解析结果压缩保存到 `<output-dir>/analysis_cache`；页面打开不触发批量分析，也不显示缓存进度，后续页面或服务重启直接复用有效缓存。
 
 ## 安装

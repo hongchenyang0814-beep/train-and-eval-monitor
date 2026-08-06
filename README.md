@@ -23,6 +23,7 @@ A Codex skill and dependency-free Python CLI for synchronizing StreamLake Wanqin
 - Credential redaction, signed-URL cleanup, large-body omission, endpoint allowlists, and same-host redirect enforcement.
 - No third-party Python dependencies.
 - One-command deployment of a loopback-only evaluation-log Monitor with platform configuration, synchronization, task and sample analysis, multi-output switching, filtered logs, complete-original-log browser downloads, and run comparison.
+- Task binding falls back to task-family prefixes, so unfamiliar `challenge_itemic_*`, `challenge_evolution_*`, `challenge_recommendation_*`, and `challenge_common_sense` aliases still stay in the right family.
 - Incremental background analysis after each successful sync, limited to new or changed logs, with compressed persistent results under `<output-dir>/analysis_cache`; page loads do not trigger batch analysis or display cache progress, and valid caches are reused across page loads and service restarts.
 
 ## Install as a Codex skill
