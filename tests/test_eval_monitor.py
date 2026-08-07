@@ -219,6 +219,14 @@ class EvalMonitorDeploymentTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         training_config = json.loads((self.target / "training_monitor_config.json").read_text(encoding="utf-8"))
         self.assertEqual(training_config["outputs_roots"], [str(training_root.resolve())])
+        self.assertEqual(
+            training_config["training_layout"]["preferred_categories"],
+            ["lora_sft", "ai_infra/benchmark", "ai_infra/profiler"],
+        )
+        self.assertEqual(
+            training_config["training_layout"]["checkpoint_pattern"],
+            "checkpoint-<step>",
+        )
         self.assertIn("Training output roots:", result.stdout)
 
     def test_repair_paths_removes_stale_roots_and_targets(self):
@@ -337,6 +345,29 @@ class EvalMonitorAnalysisCacheTests(unittest.TestCase):
             )
             self.assertEqual(rendered.returncode, 0, rendered.stderr)
             self.assertTrue((output / "training_task.md").is_file())
+
+    def test_manifest_validation_rejects_missing_comparison_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "run-1"
+            output.mkdir()
+            (output / "training_config.yaml").write_text("model: test\n", encoding="utf-8")
+            subprocess.run(
+                [sys.executable, str(MANIFEST_TOOL), "init", "--output-dir", str(output)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            value = json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))
+            value["comparison_run"] = ""
+            (output / "run_manifest.json").write_text(json.dumps(value), encoding="utf-8")
+            validated = subprocess.run(
+                [sys.executable, str(MANIFEST_TOOL), "validate", "--output-dir", str(output)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(validated.returncode, 0)
+            self.assertIn("comparison_run", validated.stderr)
 
 
 class HuggingFaceBindingTests(unittest.TestCase):
@@ -473,6 +504,33 @@ class EvaluationTrainingBindingTests(unittest.TestCase):
             self.assertEqual(task["run_manifest"]["title"], "8K LoRA Linear kernel profiling")
             self.assertFalse(task["run_manifest"]["documentation"]["available"])
             self.assertEqual(binding["manifest"]["title"], "8K LoRA Linear kernel profiling")
+
+    def test_training_monitor_marks_comparison_run_as_required(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output" / "lora_sft" / "run-001"
+            output.mkdir(parents=True)
+            (output / "run_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "run_id": "run-001",
+                        "title": "test",
+                        "purpose": "test",
+                        "hypothesis": "test",
+                        "changes": ["test"],
+                        "dataset": {},
+                        "model": {},
+                        "config_file": "training_config.yaml",
+                        "expected_result": "test",
+                        "notes": "test",
+                        "created_at": "2026-08-07T00:00:00+08:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manifest = training_module.read_run_manifest(output)
+            self.assertFalse(manifest["valid"])
+            self.assertIn("comparison_run", manifest["missing_fields"])
 
 
 class TrainingUploadLayoutTests(unittest.TestCase):

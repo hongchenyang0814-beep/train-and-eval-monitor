@@ -70,7 +70,7 @@ MANIFEST_TEXT_LIMIT = 4000
 MANIFEST_DOC_MAX_BYTES = 32 * 1024
 MANIFEST_REQUIRED_FIELDS = (
     "schema_version", "run_id", "title", "purpose", "hypothesis", "changes",
-    "dataset", "model", "config_file", "expected_result", "notes", "created_at",
+    "comparison_run", "dataset", "model", "config_file", "expected_result", "notes", "created_at",
 )
 HF_OWNER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,38}")
 HF_REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")

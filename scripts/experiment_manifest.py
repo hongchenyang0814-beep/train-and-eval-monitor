@@ -16,7 +16,7 @@ SCHEMA_VERSION = 1
 RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 REQUIRED_FIELDS = (
     "schema_version", "run_id", "title", "purpose", "hypothesis", "changes",
-    "dataset", "model", "config_file", "expected_result", "notes", "created_at",
+    "comparison_run", "dataset", "model", "config_file", "expected_result", "notes", "created_at",
 )
 
 
