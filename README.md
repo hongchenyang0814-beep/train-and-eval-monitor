@@ -83,6 +83,8 @@ Re-running `deploy` upgrades managed application files and preserves runtime con
 
 The training settings gear stores only the Hugging Face Write Access Token at `<target-dir>/config/huggingface_token` with mode `600`. It does not change repository settings.
 
+Training records can be hidden from the default list with the per-run `隐藏` button or the selected-run `隐藏记录` button in 运行健康. This is a recoverable soft hide: the stable ID is persisted as `hidden_experiment_ids` in `<target-dir>/training_monitor_config.json`, while the original output directory, logs, and checkpoints remain untouched. Turn on `显示已隐藏记录` in the left sidebar to restore a run.
+
 Repository creation and checkpoint upload use category profiles in the runtime configuration. A profile key matches the real directory category: use `<output-root>/<category>/<run-id>/` for one level, or `<output-root>/<category>/<subcategory>/<run-id>/` for two levels. Each eligible run must contain both `trainer_log.jsonl` and `training_config.yaml`; `run_id` must equal its directory name. Categories without an exact profile remain visible in the Monitor but cannot upload. Configure a distinct repository prefix for each category that should upload:
 
 ```json

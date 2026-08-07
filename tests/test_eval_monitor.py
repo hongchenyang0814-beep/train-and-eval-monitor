@@ -476,6 +476,33 @@ class EvaluationTrainingBindingTests(unittest.TestCase):
 
 
 class TrainingUploadLayoutTests(unittest.TestCase):
+    def test_training_record_visibility_is_persisted_without_deleting_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_root = root / "output"
+            run = output_root / "lora_sft" / "run-001"
+            run.mkdir(parents=True)
+            log_path = run / "trainer_log.jsonl"
+            log_path.write_text('{"step": 1, "loss": 0.4}\n', encoding="utf-8")
+            config_path = root / "training_monitor_config.json"
+            config_path.write_text(json.dumps({"outputs_roots": [str(output_root)], "targets": []}), encoding="utf-8")
+            config = training_module.load_config(config_path)
+            target = training_module.discover_targets(config)[0]
+
+            saved = training_module.set_experiment_visibility(config, target["id"], True)
+            self.assertTrue(saved["hidden"])
+            self.assertEqual(json.loads(config_path.read_text(encoding="utf-8"))["hidden_experiment_ids"], [target["id"]])
+            self.assertTrue(run.is_dir())
+            self.assertTrue(log_path.is_file())
+            self.assertEqual(training_module.build_snapshot(config)["experiments"], [])
+            shown = training_module.build_snapshot(config, include_hidden=True)
+            self.assertEqual(len(shown["experiments"]), 1)
+            self.assertTrue(shown["experiments"][0]["hidden"])
+
+            restored = training_module.set_experiment_visibility(config, target["id"], False)
+            self.assertFalse(restored["hidden"])
+            self.assertEqual(len(training_module.build_snapshot(config)["experiments"]), 1)
+
     def test_remote_upload_match_requires_the_adapter_file(self):
         target = {
             "output_dir": "/tmp/output/lora_sft/run-001",
@@ -700,6 +727,13 @@ Updated sample metrics to:
         self.assertLess(dashboard.index('id="uploadBtn"'), dashboard.index('id="syncBtn"'))
         self.assertNotIn('id="manualUploadButton"', dashboard)
 
+    def test_dashboard_surfaces_persistent_sync_health_and_last_sync(self):
+        dashboard = (ROOT / "assets" / "eval-monitor" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn('id="syncHealth"', dashboard)
+        self.assertIn("sync_state?.updated_at", dashboard)
+        self.assertIn("日志下载", dashboard)
+        self.assertIn("数据健康需关注", dashboard)
+
     def test_dashboard_renders_recommendation_automatic_metrics(self):
         dashboard = (ROOT / "assets" / "eval-monitor" / "dashboard.html").read_text(encoding="utf-8")
         self.assertIn("Think 抄答", dashboard)
@@ -746,6 +780,12 @@ Updated sample metrics to:
         self.assertIn("继续使用原训练监控配置", dashboard)
         self.assertIn("当前监控未配置HuggingFace 账号，请点击右上角齿轮配置", dashboard)
         self.assertIn("此任务未配置上传参数，请检查原训练监控配置", dashboard)
+        self.assertIn('id="showHidden"', dashboard)
+        self.assertIn('id="recordVisibilityButton"', dashboard)
+        self.assertIn("experiment-visibility", dashboard)
+        self.assertIn("不会删除原始目录或日志", dashboard)
+        self.assertIn("function toast(message)", dashboard)
+        self.assertNotIn("window.confirm", dashboard)
 
     def test_training_dashboard_formats_age_as_hours_then_days(self):
         dashboard = (ROOT / "assets" / "eval-monitor" / "training_dashboard.html").read_text(encoding="utf-8")

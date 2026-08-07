@@ -50,6 +50,11 @@
     .summary-item:last-child { border-right: 0; }
     .eyebrow { color: var(--muted); font-size: 10px; text-transform: uppercase; }
     .summary-value { margin-top: 2px; color: #fff; font: 650 19px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sync-health { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 7px 18px; border-bottom: 1px solid var(--line); background: #11191b; font-size: 11px; }
+    .sync-health.ok { color: var(--green); }
+    .sync-health.warning { color: var(--amber); background: #1b1811; }
+    .sync-health.error { color: var(--red); background: #211416; }
+    .sync-health.hidden { display: none; }
     .workspace { height: calc(100vh - 132px); display: grid; grid-template-columns: 310px minmax(0,1fr); min-height: 520px; }
     .sidebar { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: #0d1214; }
     .sidebar-head { padding: 14px; border-bottom: 1px solid var(--line); }
@@ -294,6 +299,7 @@
     <div class="summary-item"><div class="eyebrow">日志体积</div><div id="logSize" class="summary-value">--</div></div>
     <div class="summary-item"><div class="eyebrow">最近同步</div><div id="lastSync" class="summary-value">--</div></div>
   </section>
+  <div id="syncHealth" class="sync-health hidden" role="status" aria-live="polite"></div>
   <main class="workspace">
     <aside class="sidebar">
       <div class="sidebar-head"><div class="section-title"><h2>评测日志</h2><span id="filteredCount">0 项</span></div><input id="evalSearch" type="search" placeholder="搜索名称、模型或 ID"></div>
@@ -372,23 +378,53 @@
     const statusClass = s => /succeed|complete/i.test(s)?'success':/running|pending/i.test(s)?'running':/fail|error/i.test(s)?'failed':'';
     function toast(message, error=false) { const el=$('toast'); el.textContent=message; el.className=`toast${error?' error':''}`; clearTimeout(toast.timer); toast.timer=setTimeout(()=>el.classList.add('hidden'),5000); }
     async function api(path, options={}) { const res=await fetch(path,options); let data={}; try { data=await res.json(); } catch {} if(!res.ok) throw new Error(data.error||`请求失败 (${res.status})`); return data; }
+    function syncHealth(snapshot=state.snapshot) {
+      const persisted=snapshot?.sync_state||{}, runtime=snapshot?.sync?.result||{};
+      const metadataErrors=Number(runtime.error_count ?? persisted.error_count ?? 0) || 0;
+      const downloadSummary=runtime.log_downloads||persisted.log_downloads||{};
+      const logErrors=Number(downloadSummary.error_count||0) || 0;
+      const analysisErrors=Array.isArray(snapshot?.analysis_cache?.errors) ? snapshot.analysis_cache.errors.length : Number(snapshot?.analysis_cache?.error_count||0) || 0;
+      const hasHistory=Boolean(persisted.updated_at||snapshot?.sync?.finished_at||Object.keys(runtime).length);
+      return { metadataErrors, logErrors, analysisErrors, total: metadataErrors+logErrors+analysisErrors, hasHistory };
+    }
+    function renderSyncHealth() {
+      const banner=$('syncHealth'); if(!banner)return;
+      const health=syncHealth();
+      if(!health.hasHistory){ banner.className='sync-health hidden'; banner.textContent=''; return; }
+      if(health.total){
+        const details=[];
+        if(health.metadataErrors)details.push(`元数据 ${health.metadataErrors}`);
+        if(health.logErrors)details.push(`日志下载 ${health.logErrors}`);
+        if(health.analysisErrors)details.push(`日志分析 ${health.analysisErrors}`);
+        banner.className='sync-health warning'; banner.textContent=`数据健康需关注：${details.join('，')} 个错误。已成功写入的记录仍然保留。`;
+        return;
+      }
+      banner.className='sync-health ok'; banner.textContent='数据健康：最近一次同步、日志下载和分析均无错误。';
+    }
     async function loadSnapshot(quiet=false) {
       try {
         const previousRunning=state.snapshot?.sync?.running;
         state.snapshot=await api('/api/snapshot'); state.token=state.snapshot.token;
+        const health=syncHealth(state.snapshot);
         const cookieStatus=state.snapshot.config.cookie_status;
-        const connection=cookieStatus==='configured'
+        const connection=cookieStatus==='configured' && health.total===0
           ? ['online','本地服务在线 · 数据已加载 · Cookie 已配置']
+          : cookieStatus==='configured' && health.total>0
+            ? ['warning',`本地服务在线 · 数据已加载 · 同步有 ${health.total} 个错误`]
           : cookieStatus==='expired'
             ? ['warning','本地服务在线 · 数据已加载 · Cookie 已过期，请在齿轮中更新']
             : ['error','本地服务在线 · 数据已加载 · Cookie 未配置，请在齿轮中配置'];
         $('connectionDot').className=`dot ${connection[0]}`; $('connectionText').textContent=connection[1];
-        renderSummary(); renderEvalList(); updateSyncButton(); renderConfigState();
+        renderSummary(); renderSyncHealth(); renderEvalList(); updateSyncButton(); renderConfigState();
         const ids=state.snapshot.evaluations.map(x=>x.id);
         if (!ids.includes(state.selectedId)) state.selectedId=ids[0]||'';
         if (state.selectedId && (!state.detail || state.detail.evaluation.id!==state.selectedId || (previousRunning && !state.snapshot.sync.running))) await selectEvaluation(state.selectedId, true);
         if (state.snapshot.sync.running) schedulePoll(1800); else schedulePoll(15000);
-        if (previousRunning && !state.snapshot.sync.running) toast(state.snapshot.sync.status==='success'?'同步完成，列表与日志已更新':`同步失败：${state.snapshot.sync.message}`,state.snapshot.sync.status!=='success');
+        if (previousRunning && !state.snapshot.sync.running) {
+          if(state.snapshot.sync.status!=='success') toast(`同步失败：${state.snapshot.sync.message}`,true);
+          else if(health.total) toast(`同步完成，但有 ${health.total} 个数据问题，请查看顶部数据健康提示`,true);
+          else toast('同步完成，列表与日志已更新');
+        }
       } catch(error) {
         $('connectionDot').className='dot error'; $('connectionText').textContent='本地服务连接失败'; if(!quiet) toast(error.message,true); schedulePoll(5000);
       }
@@ -398,7 +434,7 @@
       const items=state.snapshot.evaluations, logs=items.filter(x=>x.log.available), best=Math.max(...items.map(x=>Number(x.score)).filter(Number.isFinite));
       $('totalCount').textContent=items.length; $('logCount').textContent=`${logs.length} / ${items.length}`; $('bestScore').textContent=Number.isFinite(best)?num(best,6):'--';
       $('logSize').textContent=bytes(logs.reduce((n,x)=>n+x.log.size_bytes,0));
-      const finished=state.snapshot.sync.finished_at || state.snapshot.sync_state?.finished_at; $('lastSync').textContent=finished?date(finished):'--';
+      const finished=state.snapshot.sync.finished_at || state.snapshot.sync_state?.finished_at || state.snapshot.sync_state?.updated_at; $('lastSync').textContent=finished?date(finished):'--';
     }
     function renderEvalList() {
       const q=$('evalSearch').value.trim().toLowerCase(); const items=state.snapshot.evaluations.filter(x=>`${x.name} ${x.model_name} ${x.id}`.toLowerCase().includes(q)); $('filteredCount').textContent=`${items.length} 项`;
