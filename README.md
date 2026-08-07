@@ -30,6 +30,8 @@ For a new runtime, deployment conservatively checks `--training-output-root`, `S
 
 The fixed runtime template is machine-relative: `$HOME/.local/share/streamlake-eval-monitor` with `config/` and `data/` below it. The training directory is represented by `<TRAINING_OUTPUT_ROOT>` until deployment discovers or receives a real directory. `repair-paths` resolves the template on the current computer, removes invalid `outputs_roots` and `targets`, and keeps valid local entries.
 
+The portable training layout mirrors the reference Monitor: `<TRAINING_OUTPUT_ROOT>/lora_sft/<run-id>/`, `<TRAINING_OUTPUT_ROOT>/ai_infra/benchmark/<run-id>/`, or `<TRAINING_OUTPUT_ROOT>/ai_infra/profiler/<run-id>/`. Keep `training_config.yaml`, `trainer_log.jsonl`, `run_manifest.json`, and generated `training_task.md` in each run directory; checkpoints use `checkpoint-<step>/` below that directory. Other category names are still scanned, but they need an explicit profile before checkpoint upload is enabled.
+
 ## Install
 
 Requirements: Git, Python 3.10+, and Codex.
@@ -155,6 +157,8 @@ python "$MANIFEST_TOOL" render --output-dir "/absolute/path/to/run-output"
 Required fields are `schema_version`, `run_id`, `title`, `purpose`, `hypothesis`, `changes`, `comparison_run`, `dataset`, `model`, `config_file`, `expected_result`, `notes`, and `created_at`. `config_file` must be a filename inside the run directory; it must not be an absolute path from another machine. An AI must not launch training when validation fails. When parameters or the comparison baseline change, it must update and render the manifest again. `run_manifest.json` is machine-readable; `training_task.md` is the readable document displayed by the evaluation page.
 
 The evaluation toolbar accepts manual evaluation-log uploads before the Sync button. The same parser validates tasks, samples, or evaluation metadata, then permanently stores the original under `<output-dir>/logs/<eval-task-id>/evaluation.log`, the same path used by synchronized logs, with an analysis cache, `evaluation_note.md`, and a visible `自主上传` label. The evaluation detail header can bind a synchronized or manually uploaded evaluation to a discovered training task. Binding does not require a `run_manifest.json` or `training_task.md`; the page shows the run date/ID and manifest title when available, and explicitly reports when the optional training explanation is unavailable. This keeps the relationship explicit instead of inferring it from a model name.
+
+Manual evaluation uploads do not require a user-authored explanation file. The generated `evaluation_note.md` records the source, original filename, evaluation ID, upload time, SHA-256, parser version, recognized task/sample/completed/issue counts, and optional training binding. Training binding can target a run without those optional documents, but an AI must still initialize, validate, and render the training explanation before launching training.
 
 ## CLI Commands
 

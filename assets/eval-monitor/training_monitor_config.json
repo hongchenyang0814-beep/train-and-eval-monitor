@@ -6,6 +6,24 @@
   "max_scan_depth": 3,
   "outputs_roots": [],
   "targets": [],
+  "training_layout": {
+    "run_patterns": [
+      "<output-root>/<category>/<run-id>",
+      "<output-root>/<category>/<subcategory>/<run-id>"
+    ],
+    "preferred_categories": [
+      "lora_sft",
+      "ai_infra/benchmark",
+      "ai_infra/profiler"
+    ],
+    "required_run_files": [
+      "training_config.yaml",
+      "trainer_log.jsonl",
+      "run_manifest.json",
+      "training_task.md"
+    ],
+    "checkpoint_pattern": "checkpoint-<step>"
+  },
   "auto_upload": {
     "config_file": "training_config.yaml",
     "profiles": {}

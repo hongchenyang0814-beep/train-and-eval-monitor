@@ -28,6 +28,8 @@ Train and Eval Monitor 是一个面向 Codex 的 Skill 和零第三方依赖 Pyt
 
 固定的运行目录模板是机器相关的 `$HOME/.local/share/streamlake-eval-monitor`，其下保存 `config/` 和 `data/`。训练目录先以 `<TRAINING_OUTPUT_ROOT>` 占位，部署时再由当前机器自动发现或显式传入。`repair-paths` 会在当前电脑上解析模板、删除失效的 `outputs_roots` 和 `targets`，保留真实存在的本地路径。
 
+训练输出目录尽量统一为参考 Monitor 的格式：`<TRAINING_OUTPUT_ROOT>/lora_sft/<run-id>/`、`<TRAINING_OUTPUT_ROOT>/ai_infra/benchmark/<run-id>/` 或 `<TRAINING_OUTPUT_ROOT>/ai_infra/profiler/<run-id>/`。每个运行目录内放置 `training_config.yaml`、`trainer_log.jsonl`、`run_manifest.json` 和生成的 `training_task.md`；checkpoint 放在该目录下的 `checkpoint-<step>/`。其他分类仍会被扫描，但只有配置了对应 profile 后才允许 checkpoint 上传。
+
 ## 安装
 
 要求：Git、Python 3.10 或更高版本，以及 Codex。
@@ -153,6 +155,8 @@ ssh -N -L 18280:127.0.0.1:18280 USER@SERVER
 训练页显示指标、进度、GPU、run manifest、checkpoint、最近日志，并保留原 checkpoint 上传流程。评测页提供同步、任务分层、Think/No-think 样本、多输出查看、完整日志下载、对比、排行和持久化增量分析。普通同步硬性限制为 `2026-08-01T00:00:00Z`（含）之后的记录；无输出的失败任务会过滤，运行中的任务等出现输出后再下载日志，日志下载不设大小上限。
 
 评测页顶部工具区提供“上传”和“同步”按钮，上传位于同步之前且使用不同颜色。上传文件会先用同一解析器校验，至少要识别出任务、样本或评测元数据；通过后原始文件永久保存到与平台同步相同的 `<output-dir>/logs/<eval-task-id>/evaluation.log`，同时保存分析缓存和 `evaluation_note.md`，左侧显示“自主上传”标签。上传时可以直接选择训练任务，之后也可以在详情页更换绑定；平台同步不会清理这些手工记录。
+
+评测上传不要求用户另写说明文档。系统生成的 `evaluation_note.md` 会记录来源、原文件名、评测 ID、上传时间、SHA-256、解析器版本、识别任务数、展示样本数、完成任务数、解析异常数和可选的训练绑定。训练绑定允许没有 `run_manifest.json` 或 `training_task.md` 的运行目录，但 AI 启动训练前仍必须完成训练说明文档的初始化、校验和渲染。
 
 ## CLI 常用命令
 
