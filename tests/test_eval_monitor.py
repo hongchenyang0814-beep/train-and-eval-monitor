@@ -421,6 +421,60 @@ class HuggingFaceBindingTests(unittest.TestCase):
                 training_module.save_huggingface_binding(config, {"token": "hf_test", "owner": "should-not-change"})
 
 
+class EvaluationTrainingBindingTests(unittest.TestCase):
+    def test_binding_keeps_task_identity_when_manifest_is_missing(self):
+        binding = monitor.EvalMonitorServer.training_binding_for_task(
+            {
+                "id": "run-1-id",
+                "label": "08051644",
+                "run_id": "08051644",
+                "output_dir": "/tmp/output/run-1",
+                "run_manifest": {"available": False, "error": None},
+            }
+        )
+        self.assertEqual(binding["label"], "08051644")
+        self.assertEqual(binding["run_id"], "08051644")
+        self.assertFalse(binding["manifest"]["available"])
+
+    def test_discovered_task_exposes_manifest_title_without_requiring_document(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output" / "lora_sft" / "08051644"
+            output.mkdir(parents=True)
+            (output / "trainer_log.jsonl").write_text('{"step": 1}\n', encoding="utf-8")
+            (output / "training_config.yaml").write_text("model: test\n", encoding="utf-8")
+            (output / "run_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "run_id": "08051644",
+                        "title": "8K LoRA Linear kernel profiling",
+                        "purpose": "test",
+                        "hypothesis": "test",
+                        "changes": ["test"],
+                        "comparison_run": "baseline",
+                        "dataset": {"summary": "test"},
+                        "model": {"base_model": "test"},
+                        "config_file": "training_config.yaml",
+                        "expected_result": "test",
+                        "notes": "test",
+                        "created_at": "2026-08-07T00:00:00+08:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            config_path = root / "training_monitor_config.json"
+            config_path.write_text(json.dumps({"outputs_roots": [str(root / "output")], "targets": []}), encoding="utf-8")
+            config = training_module.load_config(config_path)
+            target = training_module.discover_targets(config)[0]
+            task = training_module.build_experiment(target, config, time.time())
+            binding = monitor.EvalMonitorServer.training_binding_for_task(task)
+            self.assertEqual(task["label"], "08051644")
+            self.assertEqual(task["run_manifest"]["title"], "8K LoRA Linear kernel profiling")
+            self.assertFalse(task["run_manifest"]["documentation"]["available"])
+            self.assertEqual(binding["manifest"]["title"], "8K LoRA Linear kernel profiling")
+
+
 class TrainingUploadLayoutTests(unittest.TestCase):
     def test_remote_upload_match_requires_the_adapter_file(self):
         target = {

@@ -126,7 +126,7 @@ python "$MANIFEST_TOOL" render --output-dir "/absolute/path/to/run-output"
 
 必填字段为 `schema_version`、`run_id`、`title`、`purpose`、`hypothesis`、`changes`、`comparison_run`、`dataset`、`model`、`config_file`、`expected_result`、`notes` 和 `created_at`。`config_file` 只能是运行目录内的文件名，不能写另一台机器的绝对路径。校验失败时，AI 不得启动训练命令；训练参数或基线改变时必须重新更新并渲染。机器可读文件是 `run_manifest.json`，可读文件是同目录的 `training_task.md`。
 
-评测页标题区的“绑定训练任务”会读取训练 Monitor 发现的运行目录，并在概览中展示这两份说明。只有 `run_manifest.json` 存在且通过校验的训练任务可以绑定；无说明或字段不完整的任务会被禁用。这样评测记录能明确对应哪一次训练，而不会把模型名当作绑定关系。
+评测页标题区的“绑定训练任务”会读取训练 Monitor 发现的运行目录，并在概览中展示可用的说明。绑定不再要求 `run_manifest.json` 或 `training_task.md` 存在且通过校验；下拉框显示“运行日期/ID · 训练任务名称”，没有说明的任务仍可绑定，概览中只提示暂无训练说明。这样评测记录能明确对应哪一次训练，而不会把模型名当作绑定关系。
 
 ## 配置 StreamLake
 

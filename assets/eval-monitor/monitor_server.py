@@ -1014,6 +1014,20 @@ class EvalMonitorServer(ThreadingHTTPServer):
         tasks.sort(key=lambda item: item.get("modified_at") or 0, reverse=True)
         return tasks
 
+    @staticmethod
+    def training_binding_for_task(task: Mapping[str, Any]) -> dict[str, Any]:
+        task_id = str(task.get("id", "")).strip()
+        if not task_id:
+            raise ValueError("训练任务缺少有效 ID")
+        manifest = task.get("run_manifest") if isinstance(task.get("run_manifest"), dict) else {"available": False}
+        return {
+            "id": task_id,
+            "label": task.get("label", ""),
+            "run_id": task.get("run_id", ""),
+            "output_dir": task.get("output_dir", ""),
+            "manifest": manifest,
+        }
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "EvalLogMonitor/1.0"
@@ -1418,16 +1432,7 @@ class Handler(BaseHTTPRequestHandler):
                         task = next((item for item in self.app.training_tasks() if item.get("id") == task_id), None)
                         if task is None:
                             raise ValueError("指定的训练任务不存在或尚未被训练 Monitor 发现")
-                        manifest = task.get("run_manifest") if isinstance(task.get("run_manifest"), dict) else {}
-                        if not manifest.get("available") or not manifest.get("valid"):
-                            raise ValueError("该训练任务的 run_manifest.json 未通过校验，请先生成并补齐训练说明")
-                        binding = {
-                            "id": task.get("id", ""),
-                            "label": task.get("label", ""),
-                            "run_id": task.get("run_id", ""),
-                            "output_dir": task.get("output_dir", ""),
-                            "manifest": task.get("run_manifest", {"available": False}),
-                        }
+                        binding = self.app.training_binding_for_task(task)
                     result = self.app.repository.add_manual_log(temporary, filename, binding)
                     self.app.analysis_manager.ensure_started()
                     self._json({"status": "saved", "evaluation": result}, HTTPStatus.CREATED)
@@ -1449,16 +1454,7 @@ class Handler(BaseHTTPRequestHandler):
                     task = next((item for item in self.app.training_tasks() if item.get("id") == task_id), None)
                     if task is None:
                         raise ValueError("指定的训练任务不存在或尚未被训练 Monitor 发现")
-                    manifest = task.get("run_manifest") if isinstance(task.get("run_manifest"), dict) else {}
-                    if not manifest.get("available") or not manifest.get("valid"):
-                        raise ValueError("该训练任务的 run_manifest.json 未通过校验，请先生成并补齐训练说明")
-                    binding = {
-                        "id": task.get("id", ""),
-                        "label": task.get("label", ""),
-                        "run_id": task.get("run_id", ""),
-                        "output_dir": task.get("output_dir", ""),
-                        "manifest": task.get("run_manifest", {"available": False}),
-                    }
+                    binding = self.app.training_binding_for_task(task)
                 saved = self.app.repository.bind_training(evaluation_id, binding)
                 self._json({"status": "saved", "training_binding": saved})
                 return
