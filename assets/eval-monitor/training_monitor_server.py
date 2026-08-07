@@ -93,6 +93,10 @@ def load_config(path: Path) -> dict[str, Any]:
     config["max_scan_depth"] = max(1, min(6, int(config.get("max_scan_depth", 3))))
     config.setdefault("outputs_roots", [str(Path.home() / "output")])
     config.setdefault("targets", [])
+    hidden_ids = config.get("hidden_experiment_ids", [])
+    if not isinstance(hidden_ids, list):
+        hidden_ids = []
+    config["hidden_experiment_ids"] = [str(value).strip() for value in hidden_ids if str(value).strip()]
     config["_config_path"] = str(path.resolve())
     token_path = config.get("huggingface_token_file") or (path.parent / "config" / "huggingface_token")
     config["huggingface_token_file"] = str(Path(token_path).expanduser().resolve())
@@ -444,6 +448,29 @@ def discover_targets(config: dict[str, Any]) -> list[dict[str, Any]]:
     for target in by_dir.values():
         apply_automatic_upload_config(target, config)
     return list(by_dir.values())
+
+
+def set_experiment_visibility(config: dict[str, Any], experiment_id: str, hidden: bool) -> dict[str, Any]:
+    """Soft-hide a training run without touching its output directory or logs."""
+    experiment_id = str(experiment_id).strip()
+    if not experiment_id:
+        raise ValueError("缺少 experiment_id")
+    discovered_ids = {str(target["id"]) for target in discover_targets(config)}
+    if experiment_id not in discovered_ids:
+        raise ValueError("指定的训练记录不存在或已不再位于配置的输出目录")
+    hidden_ids = set(str(value) for value in config.get("hidden_experiment_ids", []))
+    if hidden:
+        hidden_ids.add(experiment_id)
+    else:
+        hidden_ids.discard(experiment_id)
+    config["hidden_experiment_ids"] = sorted(hidden_ids)
+    _persist_config(config)
+    return {
+        "experiment_id": experiment_id,
+        "hidden": hidden,
+        "hidden_experiment_ids": config["hidden_experiment_ids"],
+        "hidden_count": len(config["hidden_experiment_ids"]),
+    }
 
 
 def read_jsonl(path: Path) -> tuple[list[dict[str, Any]], int]:
@@ -982,13 +1009,17 @@ def gpu_snapshot() -> dict[str, Any]:
     }
 
 
-def build_snapshot(config: dict[str, Any]) -> dict[str, Any]:
+def build_snapshot(config: dict[str, Any], include_hidden: bool = False) -> dict[str, Any]:
     now = time.time()
     errors = []
     experiments = []
+    hidden_ids = set(str(value) for value in config.get("hidden_experiment_ids", []))
     for target in discover_targets(config):
         try:
-            experiments.append(build_experiment(target, config, now))
+            experiment = build_experiment(target, config, now)
+            experiment["hidden"] = experiment["id"] in hidden_ids
+            if include_hidden or not experiment["hidden"]:
+                experiments.append(experiment)
         except Exception as exc:  # Keep one bad run from hiding all other runs.
             errors.append({"target": target.get("label", target.get("output_dir")), "error": str(exc)})
     experiments.sort(key=lambda item: item["modified_at"] or 0, reverse=True)
@@ -999,6 +1030,8 @@ def build_snapshot(config: dict[str, Any]) -> dict[str, Any]:
         "monitor_token": config.get("_monitor_token"),
         "huggingface": huggingface_status(config),
         "stale_after_seconds": config["stale_after_seconds"],
+        "showing_hidden": include_hidden,
+        "hidden_count": len(hidden_ids),
         "config_file": config.get("_monitor_config_file", ""),
         "server": {"hostname": os.uname().nodename, "outputs_roots": config["outputs_roots"]},
         "gpu": gpu_snapshot(),
@@ -1315,7 +1348,9 @@ class MonitorHandler(BaseHTTPRequestHandler):
                 return
             self._send(200, "text/html; charset=utf-8", body)
         elif path == "/api/snapshot":
-            payload = build_snapshot(self.server.config)  # type: ignore[attr-defined]
+            query = parse_qs(parsed.query)
+            include_hidden = query.get("include_hidden", ["0"])[0].lower() in {"1", "true", "yes"}
+            payload = build_snapshot(self.server.config, include_hidden=include_hidden)  # type: ignore[attr-defined]
             self._send(200, "application/json; charset=utf-8", json.dumps(payload, ensure_ascii=False).encode())
         elif path == "/api/health":
             self._send(200, "application/json; charset=utf-8", b'{"status":"ok"}')
@@ -1340,6 +1375,27 @@ class MonitorHandler(BaseHTTPRequestHandler):
                 payload = self._read_json_body()
                 status = save_huggingface_binding(self.server.config, payload)  # type: ignore[attr-defined]
                 self._send_json(200, {"status": "saved", "huggingface": status})
+            except ValueError as exc:
+                self._send_json(400, {"error": str(exc)})
+            return
+        if path == "/api/experiment-visibility":
+            expected = self.server.config.get("_monitor_token", "")  # type: ignore[attr-defined]
+            if not isinstance(expected, str) or not secrets.compare_digest(self.headers.get("X-Eval-Monitor-Token", ""), expected):
+                self._send_json(403, {"error": "页面令牌无效，请刷新后重试"})
+                return
+            try:
+                payload = self._read_json_body()
+                allowed = {"experiment_id", "hidden"}
+                if set(payload) - allowed:
+                    raise ValueError("包含不支持的训练记录可见性字段")
+                experiment_id = str(payload.get("experiment_id", "")).strip()
+                hidden = payload.get("hidden")
+                if not experiment_id:
+                    raise ValueError("缺少 experiment_id")
+                if not isinstance(hidden, bool):
+                    raise ValueError("hidden 必须是布尔值")
+                visibility = set_experiment_visibility(self.server.config, experiment_id, hidden)  # type: ignore[attr-defined]
+                self._send_json(200, {"status": "saved", "visibility": visibility})
             except ValueError as exc:
                 self._send_json(400, {"error": str(exc)})
             return

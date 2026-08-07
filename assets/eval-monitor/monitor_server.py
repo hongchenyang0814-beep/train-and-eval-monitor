@@ -1324,7 +1324,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/train/api/snapshot":
                 if not self._training_ready():
                     return
-                self._json(self.app.training_module.build_snapshot(self.app.training_config))  # type: ignore[union-attr,arg-type]
+                include_hidden = query.get("include_hidden", ["0"])[0].lower() in {"1", "true", "yes"}
+                self._json(self.app.training_module.build_snapshot(self.app.training_config, include_hidden=include_hidden))  # type: ignore[union-attr,arg-type]
                 return
             if path == "/train/api/upload":
                 try:
@@ -1466,6 +1467,26 @@ class Handler(BaseHTTPRequestHandler):
                     self._read_small_json(),
                 )
                 self._json({"status": "saved", "huggingface": status})
+                return
+            if parsed.path == "/train/api/experiment-visibility":
+                if not self._training_ready():
+                    return
+                payload = self._read_small_json()
+                allowed = {"experiment_id", "hidden"}
+                if set(payload) - allowed:
+                    raise ValueError("包含不支持的训练记录可见性字段")
+                experiment_id = str(payload.get("experiment_id", "")).strip()
+                hidden = payload.get("hidden")
+                if not experiment_id:
+                    raise ValueError("缺少 experiment_id")
+                if not isinstance(hidden, bool):
+                    raise ValueError("hidden 必须是布尔值")
+                visibility = self.app.training_module.set_experiment_visibility(  # type: ignore[union-attr]
+                    self.app.training_config,
+                    experiment_id,
+                    hidden,
+                )
+                self._json({"status": "saved", "visibility": visibility})
                 return
             if parsed.path == "/api/sync":
                 if not self._config_status()["configured"]:

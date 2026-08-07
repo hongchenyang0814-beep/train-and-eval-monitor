@@ -93,10 +93,16 @@
     }
     .inspector { border-left: 1px solid var(--line); }
     .section-head { padding: 14px var(--panel-pad); border-bottom: 1px solid var(--line); }
-    .section-title { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .section-title { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
     .section-title h2 { margin: 0; font-size: 12px; font-weight: 650; text-transform: uppercase; }
     .section-title span { color: var(--muted); font-size: 11px; }
+    .section-action { min-height: 28px; padding: 4px 8px; color: var(--cyan); border-color: #2b625e; background: #10201f; font-size: 11px; white-space: nowrap; }
+    .section-action:hover, .section-action:focus-visible { background: #17322f; }
+    .section-action:disabled { color: var(--muted); border-color: var(--line); background: transparent; }
     .search { width: 100%; margin-top: 12px; padding: 7px 10px; }
+    .visibility-toggle { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--muted); font-size: 11px; cursor: pointer; }
+    .visibility-toggle input { width: 14px; height: 14px; margin: 0; accent-color: var(--cyan); }
+    .visibility-toggle strong { color: var(--amber); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
     .experiment-list { flex: 1 1 auto; min-height: 0; padding: 8px; overflow-y: auto; overflow-x: hidden; }
     .experiment-group { min-width: 0; border-bottom: 1px solid var(--line); }
     .experiment-group:last-child { border-bottom: 0; }
@@ -148,9 +154,16 @@
     .subgroup-items { display: grid; gap: 6px; margin: 0 0 8px 13px; padding: 10px 0 0 7px; border-left: 1px solid var(--line); }
     .subgroup-items[hidden] { display: none; }
     .subgroup-empty { padding: 7px 0; color: var(--muted); font-size: 11px; }
-    .experiment-item { width: 100%; text-align: left; padding: 11px; background: transparent; border-color: transparent; }
+    .experiment-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; border: 1px solid transparent; border-radius: 4px; }
+    .experiment-entry:has(.experiment-item.selected) { border-color: #347c74; background: #142322; }
+    .experiment-item { width: 100%; min-width: 0; text-align: left; padding: 11px; background: transparent; border-color: transparent; border-radius: 3px; }
     .experiment-item:hover { background: var(--surface-2); }
-    .experiment-item.selected { background: #142322; border-color: #347c74; }
+    .experiment-entry:has(.experiment-item.selected) .experiment-item:hover { background: transparent; }
+    .record-action { align-self: center; min-height: 27px; margin: 0 7px 0 2px; padding: 3px 7px; color: var(--muted); border-color: var(--line-strong); background: transparent; font-size: 10px; white-space: nowrap; }
+    .record-action:hover, .record-action:focus-visible { color: var(--cyan); border-color: var(--cyan); background: #10201f; }
+    .record-action.restore { color: var(--amber); }
+    .hidden-record .run-heading h3, .hidden-record .run-meta, .hidden-record .experiment-sub { color: #84918f; }
+    .hidden-record .status-mark { opacity: .55; }
     .experiment-title { display: flex; align-items: start; gap: 8px; min-width: 0; }
     .experiment-item .run-heading { display: block; min-width: 0; }
     .experiment-item .run-heading h3 { margin: 0; color: var(--text); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
@@ -253,6 +266,8 @@
     .log-panel { grid-column: 1 / -1; border-top: 1px solid var(--line-strong); background: #080b0d; }
     .log-output { margin: 0; padding: 12px 16px 20px; max-height: 250px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: #aebbb8; font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
     .error-banner { display: none; padding: 10px 18px; background: #341819; border-bottom: 1px solid var(--red); color: #ffc0c0; }
+    .toast { position: fixed; right: 18px; bottom: 18px; z-index: 60; max-width: min(440px, calc(100vw - 36px)); padding: 11px 14px; background: #172024; border: 1px solid var(--line-strong); box-shadow: 0 10px 30px rgba(0,0,0,.35); color: var(--text); font-size: 12px; }
+    .toast.hidden { display: none; }
     .empty { color: var(--muted); font-size: 12px; }
     dialog { width: min(620px, calc(100vw - 28px)); max-height: calc(100vh - 32px); padding: 0; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; }
     dialog::backdrop { background: rgba(0, 0, 0, .7); }
@@ -360,6 +375,7 @@
         <div class="section-head">
           <div class="section-title"><h2>实验目录</h2><span id="experimentCount">0 RUNS</span></div>
           <input class="search" id="searchInput" type="search" placeholder="搜索实验或路径" aria-label="搜索实验">
+          <label class="visibility-toggle"><input id="showHidden" type="checkbox"><span>显示已隐藏记录</span><strong id="hiddenCount">0</strong></label>
         </div>
         <div class="experiment-list" id="experimentList"></div>
       </aside>
@@ -389,7 +405,7 @@
       </main>
       <aside class="inspector">
         <section class="panel">
-          <div class="section-head"><div class="section-title"><h2>运行健康</h2><span>PROCESS + LOG</span></div></div>
+          <div class="section-head"><div class="section-title"><h2>运行健康</h2><button id="recordVisibilityButton" class="section-action" type="button" disabled>隐藏记录</button></div></div>
           <div class="panel-body" id="healthPanel"></div>
         </section>
         <section class="panel">
@@ -420,12 +436,15 @@
       </section>
     </div>
   </div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script>
     'use strict';
-    const state = { snapshot: null, selectedId: null, compareId: '', selectedCheckpoint: '', metric: 'loss', smooth: 1, view: null, dragStart: null, hoverX: null, timer: null, uploadInFlight: false, uploadResult: null, hfFormDirty: false, openGroups: new Set(), openSubgroups: new Set(), groupsInitialized: false };
+    const state = { snapshot: null, selectedId: null, compareId: '', selectedCheckpoint: '', metric: 'loss', smooth: 1, view: null, dragStart: null, hoverX: null, timer: null, uploadInFlight: false, visibilityInFlight: false, uploadResult: null, hfFormDirty: false, showHidden: false, openGroups: new Set(), openSubgroups: new Set(), groupsInitialized: false };
     const colors = ['#35d7c8', '#efbd5b'];
     const statusLabels = { running: '训练中', recent: '最近活跃', finalizing: '评估 / 保存', stalled: '疑似停滞', completed: '已完成', inactive: '未活动' };
     const el = id => document.getElementById(id);
+    let toastTimer = null;
+    function toast(message) { const node = el('toast'); node.textContent = message; node.className = 'toast'; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => node.classList.add('hidden'), 4200); }
     function apiPath(name) {
       let base = window.location.pathname;
       if (base.endsWith('.html')) base = base.slice(0, base.lastIndexOf('/') + 1);
@@ -488,7 +507,9 @@
       el('refreshIcon').className = 'sync-icon spinning';
       setText('refreshText', '刷新中');
       try {
-        const response = await fetch(apiPath('snapshot'), { cache: 'no-store' });
+        const snapshotUrl = new URL(apiPath('snapshot'), window.location.href);
+        if (state.showHidden) snapshotUrl.searchParams.set('include_hidden', '1');
+        const response = await fetch(snapshotUrl, { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         state.snapshot = await response.json();
         if (!state.snapshot.experiments.some(item => item.id === state.selectedId)) state.selectedId = state.snapshot.experiments[0]?.id || null;
@@ -530,6 +551,8 @@
       const current = selectedExperiment();
       setText('configPath', snapshot.config_file || 'training_monitor_config.json');
       setText('configRoots', snapshot.server.outputs_roots.join(', ') || '--');
+      el('showHidden').checked = state.showHidden;
+      setText('hiddenCount', snapshot.hidden_count || 0);
       renderHuggingFaceBinding();
       setText('statExperiments', snapshot.experiments.length);
       setText('statStatus', current ? statusLabels[current.status] || current.status : '--');
@@ -555,6 +578,7 @@
         groups.get(group.id).items.push(item);
       });
       const appendExperiment = (container, item, groupId, subgroupId = '') => {
+        const entry = document.createElement('div'); entry.className = `experiment-entry${item.hidden ? ' hidden-record' : ''}`;
         const button = document.createElement('button'); button.type = 'button'; button.className = `experiment-item${item.id === state.selectedId ? ' selected' : ''}`;
         const manifest = item.run_manifest || {};
         const title = document.createElement('div'); title.className = 'experiment-title';
@@ -582,7 +606,13 @@
           if (subgroupId) state.openSubgroups.add(`${groupId}/${subgroupId}`);
           state.compareId = ''; state.selectedCheckpoint = ''; state.uploadResult = null; state.view = null; render();
         });
-        container.append(button);
+        const action = document.createElement('button'); action.type = 'button'; action.className = `record-action${item.hidden ? ' restore' : ''}`;
+        action.textContent = state.visibilityInFlight ? '处理中' : item.hidden ? '恢复' : '隐藏';
+        action.title = item.hidden ? '恢复此训练记录到默认列表' : '隐藏此训练记录；不会删除原始目录或日志';
+        action.disabled = state.visibilityInFlight;
+        action.addEventListener('click', event => { event.stopPropagation(); setExperimentVisibility(item, !item.hidden); });
+        entry.append(button, action);
+        container.append(entry);
       };
       groups.forEach(({ group, items: groupItems }) => {
         const section = document.createElement('section'); section.className = 'experiment-group';
@@ -655,6 +685,10 @@
 
     function renderInspector() {
       const current = selectedExperiment(); const health = el('healthPanel'); health.replaceChildren();
+      const visibilityButton = el('recordVisibilityButton');
+      visibilityButton.disabled = !current || state.visibilityInFlight;
+      visibilityButton.textContent = current?.hidden ? '恢复记录' : '隐藏记录';
+      visibilityButton.title = current?.hidden ? '恢复此训练记录到默认列表' : '隐藏此训练记录；不会删除原始目录或日志';
       if (current) {
         addHealthRow(health, '状态', statusLabels[current.status] || current.status, `state-text ${current.status}`);
         addHealthRow(health, '根进程', current.pid ? `${current.pid} · ${current.process_alive ? '存活' : '已退出'}` : '未配置');
@@ -744,6 +778,29 @@
         hub.append(pattern);
       } else { hub.textContent = uploadSetupMessage; hub.className = 'panel-body empty'; setText('hubCount', 'PRIVATE REPO'); }
       setText('logPath', current?.log_path || 'NO LOG'); setText('logOutput', current?.log_tail?.join('\n') || '暂无日志内容');
+    }
+
+    async function setExperimentVisibility(item, hidden) {
+      if (!item || state.visibilityInFlight) return;
+      state.visibilityInFlight = true;
+      render();
+      try {
+        const response = await fetch(apiPath('experiment-visibility'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Eval-Monitor-Token': state.snapshot?.monitor_token || '' },
+          body: JSON.stringify({ experiment_id: item.id, hidden }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        await refresh();
+        toast(hidden ? '训练记录已隐藏；可打开“显示已隐藏记录”恢复' : '训练记录已恢复');
+      } catch (error) {
+        setText('errorBanner', `训练记录${hidden ? '隐藏' : '恢复'}失败：${error.message}`);
+        el('errorBanner').style.display = 'block';
+      } finally {
+        state.visibilityInFlight = false;
+        render();
+      }
     }
 
     async function copyRepositoryUrl(value, button) {
@@ -958,6 +1015,11 @@
     el('checkpointSelect').addEventListener('change', event => { state.selectedCheckpoint = event.target.value; state.uploadResult = null; renderInspector(); });
     el('uploadButton').addEventListener('click', uploadSelectedCheckpoint);
     el('searchInput').addEventListener('input', renderExperiments);
+    el('showHidden').addEventListener('change', event => { state.showHidden = event.target.checked; state.selectedId = null; refresh(); });
+    el('recordVisibilityButton').addEventListener('click', () => {
+      const current = selectedExperiment();
+      if (current) setExperimentVisibility(current, !current.hidden);
+    });
     el('metricSelect').addEventListener('change', event => { state.metric = event.target.value; state.compareId = ''; state.view = null; renderMetricControls(); renderSummary(); drawChart(); });
     el('compareSelect').addEventListener('change', event => { state.compareId = event.target.value; state.view = null; drawChart(); });
     el('smoothControl').addEventListener('click', event => { const button = event.target.closest('button[data-window]'); if (!button) return; state.smooth = Number(button.dataset.window); [...el('smoothControl').querySelectorAll('button')].forEach(item => item.classList.toggle('active', item === button)); drawChart(); });
